@@ -1,736 +1,442 @@
 const express = require('express');
 const mineflayer = require('mineflayer');
-const { pathfinder, movements, goals } = require('mineflayer-pathfinder');
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+const Vec3 = require('vec3');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(express.json());
+app.use(express.static('public'));
 
-// ==========================================
-// CONFIGURATION & GLOBAL STATE
-// ==========================================
-const CONFIG = {
-  host: process.env.MC_HOST || 'KnightNW.com',
-  port: parseInt(process.env.MC_PORT) || 25565,
-  username: process.env.MC_USERNAME || 'mistikhanim',
-  version: false
-};
+const bots = {};
+let webClients = [];
 
-let bot = null;
-let antiAfkInterval = null;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const botState = {
-  status: 'Başlatılıyor...',
-  health: 20,
-  food: 20,
-  position: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 },
-  selectedSlot: 0,
-  activeModule: 'Boşta',
-  inventory: [],
-  nearbyPlayers: [],
-  chatHistory: [],
-  logs: []
-};
+const FOOD_ITEMS = [
+  'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton',
+  'cooked_salmon', 'cooked_cod', 'bread', 'apple', 'golden_apple', 'baked_potato'
+];
 
-// System Logging
-function addLog(msg) {
-  const time = new Date().toLocaleTimeString('tr-TR');
-  const entry = `[${time}] ${msg}`;
-  console.log(entry);
-  botState.logs.unshift(entry);
-  if (botState.logs.length > 80) botState.logs.pop();
-}
+const AXES = ['netherite_axe', 'diamond_axe', 'iron_axe', 'golden_axe', 'stone_axe', 'wooden_axe'];
+const SWORDS = ['netherite_sword', 'diamond_sword', 'iron_sword', 'golden_sword', 'stone_sword', 'wooden_sword'];
 
-function addChat(sender, message) {
-  const time = new Date().toLocaleTimeString('tr-TR');
-  botState.chatHistory.unshift({ time, sender, message });
-  if (botState.chatHistory.length > 50) botState.chatHistory.pop();
-}
+const SAPLINGS = [
+  'oak_sapling', 'spruce_sapling', 'birch_sapling', 'jungle_sapling',
+  'acacia_sapling', 'dark_oak_sapling', 'cherry_sapling', 'mangrove_propagule'
+];
 
-// ==========================================
-// MINEFLAYER BOT CREATION & EVENTS
-// ==========================================
-function createBot() {
-  addLog('Bot sunucuya bağlanıyor...');
-  
-  bot = mineflayer.createBot({
-    host: CONFIG.host,
-    port: CONFIG.port,
-    username: CONFIG.username,
-    version: CONFIG.version
+const LOGS = [
+  'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
+  'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log',
+  'oak_wood', 'spruce_wood', 'birch_wood', 'jungle_wood'
+];
+
+const botStats = {};
+
+app.get('/api/chat-stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  webClients.push(res);
+  req.on('close', () => { webClients = webClients.filter(client => client !== res); });
+});
+
+function sendToWeb(botName, message, type = 'normal') {
+  webClients.forEach(client => {
+    client.write(`data: ${JSON.stringify({ botName, message, type, time: new Date().toLocaleTimeString() })}\n\n`);
   });
+}
 
-  bot.loadPlugin(pathfinder);
+async function sendDiscordWebhook(webhookUrl, title, description, color = 65280) {
+  if (!webhookUrl || !webhookUrl.startsWith('http')) return;
+  try {
+    const fetch = (await import('node-fetch')).default;
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embeds: [{ title, description, color, footer: { text: 'Minecraft Pro Bot V2' }, timestamp: new Date() }]
+      })
+    });
+  } catch (e) {}
+}
+
+async function checkAndEat(bot, username) {
+  if (bot.food !== undefined && bot.food < 16) {
+    const foodItem = bot.inventory.items().find(i => FOOD_ITEMS.includes(i.name));
+    if (foodItem) {
+      try {
+        await bot.equip(foodItem, 'hand');
+        await bot.consume();
+        sendToWeb(username, `[Oto-Yemek] ${foodItem.displayName || foodItem.name} yendi! (Açlık: ${bot.food}/20)`, 'system');
+      } catch (e) {}
+    }
+  }
+}
+
+async function autoEquipArmor(bot) {
+  const items = bot.inventory.items();
+  const armorSlots = {
+    helmet: items.filter(i => i.name.endsWith('_helmet')),
+    chestplate: items.filter(i => i.name.endsWith('_chestplate')),
+    leggings: items.filter(i => i.name.endsWith('_leggings')),
+    boots: items.filter(i => i.name.endsWith('_boots'))
+  };
+
+  for (const [destination, pieceList] of Object.entries(armorSlots)) {
+    if (pieceList.length > 0) {
+      pieceList.sort((a, b) => b.name.localeCompare(a.name));
+      try { await bot.equip(pieceList[0], destination); } catch(e) {}
+    }
+  }
+}
+
+// -------------------------------------------------------------
+// OYUNCU TAKİP & AĞAÇ FARMI MODU
+// -------------------------------------------------------------
+async function runTreeFarmLoop(username) {
+  const bData = bots[username];
+  if (!bData || !bData.bot) return;
+  const bot = bData.bot;
+
+  while (bData.isTreeFarming) {
+    try {
+      if (!bot.entity) { await sleep(1000); continue; }
+
+      const boneMeal = bot.inventory.items().find(i => i.name === 'bone_meal');
+      const axe = bot.inventory.items().find(i => AXES.includes(i.name));
+      const nearestPlayer = bot.nearestEntity(e => e.type === 'player' && e.username !== username);
+
+      if (!boneMeal || !axe) {
+        if (nearestPlayer && bot.entity.position.distanceTo(nearestPlayer.position) > 2.5) {
+          bot.lookAt(nearestPlayer.position.offset(0, 1.6, 0));
+          bot.setControlState('forward', true);
+          await sleep(400);
+          bot.setControlState('forward', false);
+        } else {
+          await sleep(1000);
+        }
+        continue;
+      }
+
+      const mcData = require('minecraft-data')(bot.version || '1.20.1');
+      const saplingIds = SAPLINGS.map(s => mcData.blocksByName[s]?.id).filter(Boolean);
+      let saplingBlock = bot.findBlock({ matching: saplingIds, maxDistance: 8 });
+
+      if (!saplingBlock) {
+        const invSapling = bot.inventory.items().find(i => SAPLINGS.includes(i.name));
+        if (invSapling) {
+          const dirtBlock = bot.findBlock({
+            matching: block => block.name === 'dirt' || block.name === 'grass_block' || block.name === 'coarse_dirt',
+            maxDistance: 4
+          });
+          if (dirtBlock) {
+            try {
+              await bot.equip(invSapling, 'hand');
+              await bot.placeBlock(dirtBlock, new Vec3(0, 1, 0));
+              sendToWeb(username, `[Ağaç Farmı] Envanterden fidan dikildi 🌱`, 'system');
+              await sleep(800);
+              saplingBlock = bot.findBlock({ matching: saplingIds, maxDistance: 8 });
+            } catch(e) {}
+          }
+        }
+      }
+
+      if (saplingBlock) {
+        await bot.lookAt(saplingBlock.position.offset(0.5, 0.5, 0.5));
+        await bot.equip(boneMeal, 'hand');
+        await bot.activateBlock(saplingBlock);
+        sendToWeb(username, `[Ağaç Farmı] Fidana kemik tozu uygulandı ✨`, 'system');
+        await sleep(900);
+
+        const logIds = LOGS.map(l => mcData.blocksByName[l]?.id).filter(Boolean);
+        let logBlock = bot.findBlock({ matching: logIds, maxDistance: 7 });
+
+        if (logBlock) {
+          await bot.equip(axe, 'hand');
+          while (logBlock && bData.isTreeFarming) {
+            await bot.lookAt(logBlock.position.offset(0.5, 0.5, 0.5));
+            try {
+              await bot.dig(logBlock);
+              botStats[username].logsHarvested = (botStats[username].logsHarvested || 0) + 1;
+              sendToWeb(username, `[Ağaç Farmı] Odun kırıldı! 🪓 (Toplam: ${botStats[username].logsHarvested})`, 'system');
+            } catch(e) {}
+            await sleep(350);
+            logBlock = bot.findBlock({ matching: logIds, maxDistance: 7 });
+          }
+        }
+      } else {
+        if (nearestPlayer && bot.entity.position.distanceTo(nearestPlayer.position) > 2.5) {
+          bot.lookAt(nearestPlayer.position.offset(0, 1.6, 0));
+          bot.setControlState('forward', true);
+          await sleep(400);
+          bot.setControlState('forward', false);
+        } else {
+          await sleep(1000);
+        }
+      }
+    } catch (err) {
+      await sleep(1000);
+    }
+    await sleep(400);
+  }
+}
+
+// -------------------------------------------------------------
+// BOT OLUŞTURUCU ENGINE
+// -------------------------------------------------------------
+function createBotInstance(config) {
+  const { username, host, port, password, version, autoChatMsg, webhookUrl } = config;
+
+  if (bots[username] && bots[username].bot) {
+    return { success: false, message: 'Bu kullanıcı adıyla aktif bir bot var!' };
+  }
+
+  sendToWeb(username, `[Sistem] Sunucuya bağlanılıyor: ${host}`, 'system');
+
+  let bot;
+  try {
+    bot = mineflayer.createBot({
+      host: host || 'tm.knightnw.com',
+      port: parseInt(port) || 25565,
+      username: username,
+      auth: 'offline',
+      version: version || '1.20.1',
+      checkTimeoutInterval: 30 * 1000
+    });
+    bot.loadPlugin(pathfinder);
+  } catch (err) {
+    sendToWeb(username, `[Hata] Bot başlatılamadı: ${err.message}`, 'error');
+    return { success: false, message: err.message };
+  }
+
+  botStats[username] = { startTime: Date.now(), logsHarvested: 0, mobsKilled: 0 };
+
+  let chatTimer = null;
+  let moveTimer = null;
+  let attackTimer = null;
+  let isInitialSpawn = true;
 
   bot.on('spawn', () => {
-    addLog('Bot başarıyla oyuna doğdu!');
-    botState.status = 'Çevrimiçi';
-    
-    if (bot.pathfinder) {
-      const defaultMove = new movements(bot);
-      bot.pathfinder.setMovements(defaultMove);
-    }
-    updateInventory();
-  });
+    if (isInitialSpawn) {
+      isInitialSpawn = false;
+      sendToWeb(username, `[Sistem] Oyuna girildi! Otomatik komutlar çalıştırılıyor...`, 'system');
+      sendDiscordWebhook(webhookUrl, "🟢 Bot Sunucuya Bağlandı", `**Bot:** ${username}\n**Sunucu:** ${host}`, 3066993);
 
-  bot.on('chat', (username, message) => {
-    if (username === bot.username) return;
-    addChat(username, message);
-  });
+      if (password) {
+        setTimeout(() => { if (bots[username]?.bot) bot.chat(`/login ${password}`); }, 4000);
+      }
+      setTimeout(() => { if (bots[username]?.bot) bot.chat('/skyblock'); }, 15000);
+      setTimeout(() => { if (bots[username]?.bot) bot.chat('/is join'); }, 26000);
+      setTimeout(() => { if (bots[username]?.bot) bot.chat('/is go'); }, 38000);
 
-  bot.on('messagestr', (message) => {
-    if (!message) return;
-    // Sistem veya sunucu mesajlarını yakalar
-    if (!message.includes(': ')) {
-      addChat('SYSTEM', message);
+      if (chatTimer) clearInterval(chatTimer);
+      chatTimer = setInterval(() => {
+        if (bots[username]?.bot) {
+          const b = bots[username].bot;
+          if (b._client && b._client.state === 'play' && autoChatMsg) {
+            try {
+              b.chat(autoChatMsg);
+              sendToWeb(username, `[Oto-Chat] AFK Tazeleme: ${autoChatMsg}`, 'system');
+            } catch (e) {}
+          }
+        }
+      }, 180000);
+
+      if (moveTimer) clearInterval(moveTimer);
+      moveTimer = setInterval(() => {
+        if (bots[username]?.bot && bot.entity) {
+          try {
+            bot.setControlState('jump', true);
+            setTimeout(() => { if (bots[username]?.bot) bot.setControlState('jump', false); }, 500);
+            const yaw = (bot.entity.yaw || 0) + 0.5;
+            bot.look(yaw, bot.entity.pitch || 0, true);
+          } catch(e) {}
+        }
+      }, 15000);
     }
   });
 
   bot.on('health', () => {
-    botState.health = Math.round(bot.health);
-    botState.food = Math.round(bot.food);
-    
-    // Otomatik Yemek Yeme Mantığı
-    if (bot.food < 15) {
-      const foodItem = bot.inventory.items().find(i => 
-        i.name.includes('cooked') || i.name.includes('apple') || 
-        i.name.includes('bread') || i.name.includes('steak') || i.name.includes('porkchop')
-      );
-      if (foodItem) {
-        bot.equip(foodItem, 'hand')
-          .then(() => bot.consume())
-          .catch(err => addLog(`Yemek yeme hatası: ${err.message}`));
+    checkAndEat(bot, username);
+    autoEquipArmor(bot);
+  });
+
+  bot.on('death', () => {
+    sendToWeb(username, `[ÖLÜM] Bot öldü! 2s sonra doğuluyor...`, 'error');
+    sendDiscordWebhook(webhookUrl, "⚠️ Bot Öldü!", `**Bot:** ${username} öldü. Yeniden doğuluyor...`, 15158332);
+    setTimeout(() => {
+      if (bots[username]?.bot) {
+        try {
+          bots[username].bot.respawn();
+          setTimeout(() => { if (bots[username]?.bot) bots[username].bot.chat('/is go'); }, 3000);
+        } catch(e) {}
       }
-    }
+    }, 2000);
   });
 
-  bot.on('move', () => {
-    if (!bot.entity) return;
-    botState.position = {
-      x: Math.floor(bot.entity.position.x),
-      y: Math.floor(bot.entity.position.y),
-      z: Math.floor(bot.entity.position.z),
-      yaw: bot.entity.yaw,
-      pitch: bot.entity.pitch
-    };
-    updateNearbyPlayers();
-  });
-
-  bot.on('playerJoined', (player) => {
-    addLog(`Sunucuya katıldı: ${player.username}`);
-  });
-
-  bot.on('playerLeft', (player) => {
-    addLog(`Sunucudan ayrıldı: ${player.username}`);
-  });
-
-  bot.on('heldItemChanged', () => {
-    botState.selectedSlot = bot.quickBarSlot;
-    updateInventory();
+  bot.on('message', (jsonMsg) => {
+    const text = jsonMsg.toString().trim();
+    if (text) sendToWeb(username, text, 'chat');
   });
 
   bot.on('kicked', (reason) => {
-    addLog(`Bot sunucudan atıldı: ${reason}`);
-    botState.status = 'Atıldı';
-  });
-
-  bot.on('error', (err) => {
-    addLog(`Hata oluştu: ${err.message}`);
+    let kickReason = typeof reason === 'string' ? reason : JSON.stringify(reason);
+    sendToWeb(username, `[ATILDI / KICK] ${kickReason}`, 'error');
+    sendDiscordWebhook(webhookUrl, "🔴 Bot Sunucudan Atıldı", `**Bot:** ${username}\n**Sebep:** ${kickReason}`, 15158332);
   });
 
   bot.on('end', () => {
-    addLog('Bağlantı koptu. 10 saniye sonra yeniden bağlanacak...');
-    botState.status = 'Çevrimdışı';
-    if (antiAfkInterval) clearInterval(antiAfkInterval);
-    setTimeout(createBot, 10000);
-  });
-}
+    sendToWeb(username, `[Sistem] Bağlantı koptu! 10sn sonra tekrar bağlanılacak...`, 'error');
+    if (chatTimer) clearInterval(chatTimer);
+    if (moveTimer) clearInterval(moveTimer);
+    if (attackTimer) clearInterval(attackTimer);
+    delete bots[username];
 
-// Yardımcı Güncelleme Fonksiyonları
-function updateInventory() {
-  if (!bot || !bot.inventory) return;
-  botState.inventory = bot.inventory.items().map(item => ({
-    slot: item.slot,
-    name: item.name,
-    displayName: item.displayName,
-    count: item.count
-  }));
-}
-
-function updateNearbyPlayers() {
-  if (!bot || !bot.entities) return;
-  const players = [];
-  
-  for (const id in bot.entities) {
-    const entity = bot.entities[id];
-    if (entity.type === 'player' && entity.username && entity.username !== bot.username) {
-      const dist = Math.floor(bot.entity.position.distanceTo(entity.position));
-      players.push({
-        id: entity.id,
-        username: entity.username,
-        x: Math.floor(entity.position.x),
-        y: Math.floor(entity.position.y),
-        z: Math.floor(entity.position.z),
-        distance: dist,
-        // Skin Kafası için mc-heads CDN adresi
-        skinUrl: `https://mc-heads.net/avatar/${entity.username}/64`
-      });
-    }
-  }
-  botState.nearbyPlayers = players.sort((a, b) => a.distance - b.distance);
-}
-
-// Botu başlat
-createBot();
-
-// ==========================================
-// REST API ENDPOINTS
-// ==========================================
-
-// Render & UptimeRobot Healthcheck
-app.get('/health', (req, res) => res.status(200).send('OK'));
-
-// Canlı Durum API
-app.get('/api/status', (req, res) => {
-  res.json(botState);
-});
-
-// Sol Tık (Vur / Kır / Swing) & Sağ Tık (Kullan / Etkileşim)
-app.post('/api/click', (req, res) => {
-  const { type } = req.body;
-  if (!bot || !bot.entity) {
-    return res.status(400).json({ success: false, message: 'Bot oyunda değil!' });
-  }
-
-  try {
-    if (type === 'left') {
-      // Sol tık: El sallar ve bakılan varlığa/bloğa vurur
-      bot.swing('right');
-      const targetEntity = bot.entityAtCursor(4);
-      if (targetEntity) {
-        bot.attack(targetEntity);
-        addLog(`Sol Tık: ${targetEntity.username || targetEntity.name} varlığına vuruldu.`);
-      } else {
-        addLog('Sol Tık: Havaya/boşluğa vuruldu.');
-      }
-    } else if (type === 'right') {
-      // Sağ tık: Eldeki eşyayı veya bakılan bloğu kullanır
-      const targetBlock = bot.blockAtCursor(4);
-      if (targetBlock) {
-        bot.activateBlock(targetBlock);
-        addLog(`Sağ Tık: ${targetBlock.name} bloğu ile etkileşime girildi.`);
-      } else {
-        bot.activateItem();
-        addLog('Sağ Tık: Eldeki eşya kullanıldı.');
-      }
-    }
-    res.json({ success: true, message: `${type.toUpperCase()} tık uygulandı.` });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Sohbet Mesajı ve Komut Gönderme
-app.post('/api/chat', (req, res) => {
-  const { message } = req.body;
-  if (!bot || !bot.entity) {
-    return res.status(400).json({ success: false, message: 'Bot aktif değil!' });
-  }
-  
-  bot.chat(message);
-  addChat(bot.username, message);
-  addLog(`Sohbet Gönderildi: ${message}`);
-  res.json({ success: true });
-});
-
-// Hotbar Slot Değiştirme
-app.post('/api/slot', (req, res) => {
-  const { slot } = req.body;
-  if (!bot || slot < 0 || slot > 8) {
-    return res.status(400).json({ success: false, message: 'Geçersiz slot!' });
-  }
-  
-  bot.setQuickBarSlot(slot);
-  botState.selectedSlot = slot;
-  addLog(`Hotbar slotu değiştirildi: ${slot + 1}`);
-  res.json({ success: true });
-});
-
-// Oyuncu Takip Etme / Pathfinder
-app.post('/api/follow', (req, res) => {
-  const { username } = req.body;
-  if (!bot || !bot.pathfinder) {
-    return res.status(400).json({ success: false, message: 'Pathfinder aktif değil!' });
-  }
-
-  const target = bot.players[username]?.entity;
-  if (!target) {
-    return res.status(404).json({ success: false, message: 'Oyuncu yakında bulunamadı!' });
-  }
-
-  const goal = new goals.GoalFollow(target, 2);
-  bot.pathfinder.setGoal(goal, true);
-  botState.activeModule = `Takip Ediyor: ${username}`;
-  addLog(`${username} oyuncusu takip ediliyor...`);
-  res.json({ success: true });
-});
-
-// AFK Önleyici Modül
-app.post('/api/anti-afk', (req, res) => {
-  const { enable } = req.body;
-  
-  if (antiAfkInterval) clearInterval(antiAfkInterval);
-
-  if (enable) {
-    antiAfkInterval = setInterval(() => {
-      if (bot && bot.entity) {
-        const randomYaw = (Math.random() * 360 - 180) * (Math.PI / 180);
-        bot.look(randomYaw, 0, true);
-        bot.setControlState('jump', true);
-        setTimeout(() => bot.setControlState('jump', false), 300);
-      }
+    setTimeout(() => {
+      if (!bots[username]) createBotInstance(config);
     }, 10000);
-    botState.activeModule = 'Anti-AFK Aktif';
-    addLog('Anti-AFK modu başlatıldı.');
+  });
+
+  bots[username] = {
+    bot, config, chatTimer, moveTimer, attackTimer,
+    isAttacking: false, isTreeFarming: false, isCropFarming: false
+  };
+
+  return { success: true };
+}
+
+// Varsayılan Bot
+createBotInstance({
+  username: 'mistikhanim',
+  password: 'salakmustafa',
+  host: 'tm.knightnw.com',
+  port: 25565,
+  version: '1.20.1',
+  autoChatMsg: '/is go'
+});
+
+// API ENDPOINTS
+app.get('/api/bots', (req, res) => res.json(Object.keys(bots).map(name => ({ username: name }))));
+
+app.get('/api/status/:username', (req, res) => {
+  const { username } = req.params;
+  if (bots[username] && bots[username].bot) {
+    const b = bots[username].bot;
+    const pos = b.entity ? {
+      x: Math.round(b.entity.position.x),
+      y: Math.round(b.entity.position.y),
+      z: Math.round(b.entity.position.z)
+    } : { x: 0, y: 0, z: 0 };
+
+    let radarEntities = [];
+    if (b.entities && b.entity) {
+      radarEntities = Object.values(b.entities)
+        .filter(e => e && e.position && e.id !== b.entity.id)
+        .map(e => ({
+          id: e.id,
+          name: e.username || e.displayName || e.name,
+          type: e.type,
+          relX: Math.round(e.position.x - b.entity.position.x),
+          relZ: Math.round(e.position.z - b.entity.position.z),
+          distance: Math.round(b.entity.position.distanceTo(e.position))
+        }))
+        .filter(e => e.distance <= 25);
+    }
+
+    res.json({
+      success: true,
+      health: b.health !== undefined ? Math.round(b.health) : 20,
+      food: b.food !== undefined ? Math.round(b.food) : 20,
+      level: b.experience?.level || 0,
+      pos: pos,
+      isAttacking: bots[username].isAttacking,
+      isTreeFarming: bots[username].isTreeFarming,
+      isCropFarming: bots[username].isCropFarming,
+      stats: botStats[username] || {},
+      radar: radarEntities
+    });
   } else {
-    botState.activeModule = 'Boşta';
-    if (bot && bot.pathfinder) bot.pathfinder.stop();
-    addLog('Tüm modüller ve Anti-AFK durduruldu.');
+    res.status(404).json({ error: 'Bot bulunamadı!' });
   }
-
-  res.json({ success: true, activeModule: botState.activeModule });
 });
 
-// ==========================================
-// FULL HTML & CANVAS WEB DASHBOARD
-// ==========================================
-app.get('/', (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minecraft Pro Ultimate Dashboard</title>
-    <style>
-        :root {
-            --bg-dark: #0f0f12;
-            --card-bg: #18181c;
-            --accent: #7289da;
-            --accent-hover: #5b6eae;
-            --green: #43b581;
-            --red: #f04747;
-            --border: #28282e;
-            --text-main: #dcddde;
-            --text-muted: #8e9297;
-        }
+app.post('/api/toggle-treefarm', (req, res) => {
+  const { username } = req.body;
+  if (bots[username] && bots[username].bot) {
+    const bData = bots[username];
+    bData.isTreeFarming = !bData.isTreeFarming;
 
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { background: var(--bg-dark); color: var(--text-main); padding: 20px; }
-
-        .header { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 20px; }
-        .header h1 { font-size: 1.5rem; color: #fff; display: flex; align-items: center; gap: 10px; }
-        .bot-badge { padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.85rem; text-transform: uppercase; }
-        .badge-online { background: rgba(67, 181, 129, 0.2); color: var(--green); border: 1px solid var(--green); }
-        .badge-offline { background: rgba(240, 71, 71, 0.2); color: var(--red); border: 1px solid var(--red); }
-
-        .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 20px; }
-        .card { background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--border); }
-        .card h2 { font-size: 1.1rem; color: #fff; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
-
-        /* Status Stats */
-        .stat-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-        .stat-box { background: #111114; padding: 12px; border-radius: 8px; border: 1px solid var(--border); }
-        .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
-        .stat-value { font-size: 1.2rem; font-weight: bold; margin-top: 4px; color: #fff; }
-
-        /* Controls & Action Buttons */
-        .action-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-        button { background: var(--accent); color: white; border: none; padding: 12px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
-        button:hover { background: var(--accent-hover); transform: translateY(-1px); }
-        button.btn-red { background: var(--red); }
-        button.btn-red:hover { background: #d83a3a; }
-        button.btn-green { background: var(--green); }
-        button.btn-green:hover { background: #3ca374; }
-
-        /* Click Controls */
-        .click-controls { display: flex; gap: 10px; background: #111114; padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 15px; }
-        .btn-left-click { background: #e67e22; flex: 1; }
-        .btn-left-click:hover { background: #d35400; }
-        .btn-right-click { background: #2980b9; flex: 1; }
-        .btn-right-click:hover { background: #1f618d; }
-
-        /* Hotbar Slots */
-        .hotbar-container { display: flex; gap: 6px; justify-content: space-between; background: #111114; padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
-        .hotbar-slot { width: 38px; height: 38px; background: #202026; border: 2px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 0.8rem; font-weight: bold; color: var(--text-muted); transition: 0.2s; }
-        .hotbar-slot.active { border-color: var(--accent); background: rgba(114, 137, 218, 0.2); color: #fff; }
-
-        /* Player List & Skins */
-        .player-list { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-        .player-card { display: flex; align-items: center; justify-content: space-between; background: #111114; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); }
-        .player-info { display: flex; align-items: center; gap: 12px; }
-        .player-skin { width: 36px; height: 36px; border-radius: 6px; border: 1px solid var(--border); background: #202026; }
-        .player-name { font-weight: 600; font-size: 0.95rem; }
-        .player-coords { font-size: 0.75rem; color: var(--text-muted); }
-
-        /* 2D Radar Canvas */
-        .radar-box { display: flex; justify-content: center; align-items: center; background: #0b0b0d; border-radius: 8px; border: 1px solid var(--border); padding: 10px; }
-        canvas { background: #111114; border-radius: 6px; }
-
-        /* Chat & Logs */
-        .chat-box { height: 200px; overflow-y: auto; background: #0b0b0d; padding: 12px; border-radius: 8px; border: 1px solid var(--border); font-size: 0.85rem; margin-bottom: 10px; display: flex; flex-direction: column-reverse; }
-        .chat-entry { margin-bottom: 6px; }
-        .chat-sender { font-weight: bold; color: var(--accent); }
-        .chat-input-group { display: flex; gap: 8px; }
-        input[type="text"] { flex: 1; background: #111114; border: 1px solid var(--border); padding: 10px 14px; border-radius: 8px; color: #fff; font-size: 0.9rem; outline: none; }
-        input[type="text"]:focus { border-color: var(--accent); }
-
-        .logs-box { height: 160px; overflow-y: auto; background: #0b0b0d; padding: 10px; border-radius: 8px; border: 1px solid var(--border); font-family: monospace; font-size: 0.8rem; color: var(--text-muted); }
-        .log-line { margin-bottom: 4px; }
-    </style>
-</head>
-<body>
-
-    <div class="header">
-        <h1>🎮 Minecraft Pro Bot Panel</h1>
-        <span id="badge-status" class="bot-badge badge-offline">Yükleniyor...</span>
-    </div>
-
-    <div class="dashboard-grid">
-        <!-- SOL PANEL: Bot Durumu ve Aksiyonlar -->
-        <div class="card">
-            <h2>📊 Bot Durumu & Aksiyonlar</h2>
-            
-            <div class="stat-group">
-                <div class="stat-box">
-                    <div class="stat-label">❤️ Can</div>
-                    <div id="stat-health" class="stat-value">20 / 20</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">🍗 Açlık</div>
-                    <div id="stat-food" class="stat-value">20 / 20</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">📍 Konum (XYZ)</div>
-                    <div id="stat-pos" class="stat-value">0, 0, 0</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">⚙️ Aktif Modül</div>
-                    <div id="stat-module" class="stat-value">Boşta</div>
-                </div>
-            </div>
-
-            <h3 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase;">🖱️ Siteden Tıklama Kontrolü</h3>
-            <div class="click-controls">
-                <button class="btn-left-click" onclick="sendClick('left')">⚔️ Sol Tık (Vur/Kır)</button>
-                <button class="btn-right-click" onclick="sendClick('right')">🛡️ Sağ Tık (Kullan)</button>
-            </div>
-
-            <h3 style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase;">🎒 Hotbar Seçimi</h3>
-            <div class="hotbar-container" id="hotbar-slots">
-                <!-- Javascript dinamik olarak 1-9 slot çizecek -->
-            </div>
-
-            <div style="margin-top: 15px;" class="action-buttons">
-                <button class="btn-green" onclick="toggleAntiAfk(true)">🔄 Anti-AFK Başlat</button>
-                <button class="btn-red" onclick="toggleAntiAfk(false)">🛑 Modülü Durdur</button>
-            </div>
-        </div>
-
-        <!-- ORTA PANEL: 2D Radar & Yakındaki Oyuncular (Skinli) -->
-        <div class="card">
-            <h2>👥 Yakındaki Oyuncular & Radar</h2>
-            
-            <div class="radar-box" style="margin-bottom: 15px;">
-                <canvas id="radarCanvas" width="220" height="220"></canvas>
-            </div>
-
-            <div class="player-list" id="player-container">
-                <!-- Skinli oyuncular buraya yüklenecek -->
-            </div>
-        </div>
-
-        <!-- SAĞ PANEL: Canlı Sohbet & Konsol Logları -->
-        <div class="card">
-            <h2>💬 Canlı Oyun İçi Sohbet</h2>
-            <div class="chat-box" id="chat-container"></div>
-            <div class="chat-input-group">
-                <input type="text" id="chat-input" placeholder="Mesaj veya /komut yazın..." onkeydown="if(event.key==='Enter') sendChatMessage()">
-                <button onclick="sendChatMessage()">Gönder</button>
-            </div>
-
-            <h2 style="margin-top: 20px;">📋 Sistem Logları</h2>
-            <div class="logs-box" id="logs-container"></div>
-        </div>
-    </div>
-
-    <script>
-        let currentSelectedSlot = 0;
-        const playerSkinsCache = {};
-
-        // Hotbar Butonlarını Oluştur
-        const hotbarElem = document.getElementById('hotbar-slots');
-        for (let i = 0; i < 9; i++) {
-            const slotBtn = document.createElement('div');
-            slotBtn.className = \`hotbar-slot \${i === 0 ? 'active' : ''}\`;
-            slotBtn.innerText = i + 1;
-            slotBtn.onclick = () => selectSlot(i);
-            slotBtn.id = \`slot-\${i}\`;
-            hotbarElem.appendChild(slotBtn);
-        }
-
-        async function fetchDashboardData() {
-            try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-
-                // Status Badge
-                const badge = document.getElementById('badge-status');
-                badge.innerText = data.status;
-                badge.className = \`bot-badge \${data.status === 'Çevrimiçi' ? 'badge-online' : 'badge-offline'}\`;
-
-                // Stats
-                document.getElementById('stat-health').innerText = \`\${data.health} / 20\`;
-                document.getElementById('stat-food').innerText = \`\${data.food} / 20\`;
-                document.getElementById('stat-pos').innerText = \`\${data.position.x}, \${data.position.y}, \${data.position.z}\`;
-                document.getElementById('stat-module').innerText = data.activeModule;
-
-                // Slot Selection Update
-                if (currentSelectedSlot !== data.selectedSlot) {
-                    document.querySelectorAll('.hotbar-slot').forEach(el => el.classList.remove('active'));
-                    const activeSlot = document.getElementById(\`slot-\${data.selectedSlot}\`);
-                    if (activeSlot) activeSlot.classList.add('active');
-                    currentSelectedSlot = data.selectedSlot;
-                }
-
-                // Render Player Skins
-                renderPlayerList(data.nearbyPlayers);
-
-                // Render 2D Radar
-                drawRadar(data.position, data.nearbyPlayers);
-
-                // Render Chat & Logs
-                renderChat(data.chatHistory);
-                renderLogs(data.logs);
-
-            } catch (err) {
-                console.error("Veri çekme hatası:", err);
-            }
-        }
-
-        function renderPlayerList(players) {
-            const container = document.getElementById('player-container');
-            if (!players || players.length === 0) {
-                container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">Yakında hiç oyuncu yok.</div>';
-                return;
-            }
-
-            container.innerHTML = players.map(p => \`
-                <div class="player-card">
-                    <div class="player-info">
-                        <img src="\${p.skinUrl}" class="player-skin" alt="\${p.username}" onerror="this.src='https://mc-heads.net/avatar/MHF_Steve/64'">
-                        <div>
-                            <div class="player-name">\${p.username}</div>
-                            <div class="player-coords">Mesafe: \${p.distance}m (\${p.x}, \${p.y}, \${p.z})</div>
-                        </div>
-                    </div>
-                    <button style="padding: 6px 12px; font-size: 0.75rem;" onclick="followPlayer('\${p.username}')">Takip Et</button>
-                </div>
-            \`).join('');
-        }
-
-        function drawRadar(botPos, players) {
-            const canvas = document.getElementById('radarCanvas');
-            const ctx = canvas.getContext('2d');
-            const width = canvas.width;
-            const height = canvas.height;
-            const center = width / 2;
-            const scale = 3; // 1 blok = 3 piksel
-
-            ctx.clearRect(0, 0, width, height);
-
-            // Izgara Çizimi
-            ctx.strokeStyle = '#202026';
-            ctx.lineWidth = 1;
-            for (let x = 0; x < width; x += 20) {
-                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
-            }
-            for (let y = 0; y < height; y += 20) {
-                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
-            }
-
-            // Botun Kendi Konumu (Merkez - Yeşil Nokta)
-            ctx.fillStyle = '#43b581';
-            ctx.beginPath();
-            ctx.arc(center, center, 6, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.stroke();
-
-            // Yakındaki Oyuncuları Radara Çiz (Skin Kafaları ile)
-            players.forEach(p => {
-                const relX = (p.x - botPos.x) * scale;
-                const relZ = (p.z - botPos.z) * scale;
-
-                const posX = center + relX;
-                const posY = center + relZ;
-
-                // Görüş alanı dışındakileri sınırla
-                if (posX >= 10 && posX <= width - 10 && posY >= 10 && posY <= height - 10) {
-                    if (!playerSkinsCache[p.username]) {
-                        const img = new Image();
-                        img.src = p.skinUrl;
-                        img.onload = () => { playerSkinsCache[p.username] = img; };
-                    }
-
-                    if (playerSkinsCache[p.username]) {
-                        ctx.drawImage(playerSkinsCache[p.username], posX - 8, posY - 8, 16, 16);
-                    } else {
-                        ctx.fillStyle = '#f04747';
-                        ctx.beginPath();
-                        ctx.arc(posX, posY, 4, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-
-                    // Oyuncu Adı Yazısı
-                    ctx.fillStyle = '#ffffff';
-                    ctx.font = '9px sans-serif';
-                    ctx.fillText(p.username, posX - 15, posY - 10);
-                }
-            });
-        }
-
-        function renderChat(chat) {
-            const container = document.getElementById('chat-container');
-            container.innerHTML = chat.map(c => \`
-                <div class="chat-entry">
-                    <span style="color: var(--text-muted); font-size: 0.75rem;">[\${c.time}]</span> 
-                    <span class="chat-sender">\${c.sender}:</span> 
-                    <span>\${c.message}</span>
-                </div>
-            \`).join('');
-        }
-
-        function renderLogs(logs) {
-            const container = document.getElementById('logs-container');
-            container.innerHTML = logs.map(l => \`<div class="log-line">\${l}</div>\`).join('');
-        }
-
-        // POST Aksiyonları
-        async function sendClick(type) {
-            await fetch('/api/click', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type })
-            });
-            fetchDashboardData();
-        }
-
-        async function selectSlot(slot) {
-            await fetch('/api/slot', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ slot })
-            });
-            fetchDashboardData();
-        }
-
-        async function followPlayer(username) {
-            await fetch('/api/follow', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username })
-            });
-            fetchDashboardData();
-        }
-
-        async function toggleAntiAfk(enable) {
-            await fetch('/api/anti-afk', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enable })
-            });
-            fetchDashboardData();
-        }
-
-        async function sendChatMessage() {
-            const input = document.getElementById('chat-input');
-            const message = input.value.trim();
-            if (!message) return;
-
-            await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
-            });
-
-            input.value = '';
-            fetchDashboardData();
-        }
-
-        // 2 saniyede bir otomatik verileri tazele
-        setInterval(fetchDashboardData, 2000);
-        fetchDashboardData();
-    </script>
-</body>
-</html>
-  `);
+    if (bData.isTreeFarming) {
+      sendToWeb(username, `[Sistem] Takip & Ağaç Farmı Modu AÇILDI 🌳🪓`, 'system');
+      runTreeFarmLoop(username);
+    } else {
+      sendToWeb(username, `[Sistem] Ağaç Farmı KAPATILDI! /is go çekiliyor... 🏝️`, 'system');
+      try { bots[username].bot.chat('/is go'); } catch(e) {}
+    }
+    res.json({ success: true, isTreeFarming: bData.isTreeFarming });
+  } else {
+    res.status(400).json({ error: 'Bot aktif değil!' });
+  }
 });
 
-// ==========================================
-// SERVER START
-// ==========================================
-app.listen(PORT, () => {
-  addLog(`Gelişmiş Web Dashboard ${PORT} portunda başarıyla başlatıldı!`);
-});
-const express = require('express');
-const mineflayer = require('mineflayer');
-const { pathfinder, movements, goals } = require('mineflayer-pathfinder');
+app.post('/api/deposit-chests', async (req, res) => {
+  const { username } = req.body;
+  if (bots[username] && bots[username].bot) {
+    const bot = bots[username].bot;
+    const chestBlock = bot.findBlock({ matching: block => block.name.includes('chest'), maxDistance: 5 });
 
-const app = express();
+    if (!chestBlock) return res.status(400).json({ error: '5 blok yarıçapta sandık bulunamadı!' });
+
+    try {
+      const chest = await bot.openChest(chestBlock);
+      const itemsToDeposit = bot.inventory.items().filter(i => !SWORDS.includes(i.name) && !AXES.includes(i.name) && !FOOD_ITEMS.includes(i.name));
+
+      for (const item of itemsToDeposit) {
+        try { await chest.deposit(item.type, null, item.count); } catch(e) {}
+        await sleep(300);
+      }
+      chest.close();
+      sendToWeb(username, `[Sandık] Eşyalar sandığa aktarıldı! 📦`, 'system');
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Sandık açılamadı!' });
+    }
+  } else {
+    res.status(400).json({ error: 'Bot aktif değil!' });
+  }
+});
+
+app.post('/api/send-chat', (req, res) => {
+  const { username, message } = req.body;
+  if (bots[username] && bots[username].bot) {
+    try {
+      bots[username].bot.chat(message);
+      sendToWeb(username, `[Siteden Gönderildi]: ${message}`, 'user-sent');
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  } else {
+    res.status(400).json({ error: 'Bot aktif değil!' });
+  }
+});
+
+app.post('/api/add-bot', (req, res) => {
+  const { username, password, host, port, version, autoChatMsg, webhookUrl } = req.body;
+  if (!username) return res.status(400).json({ error: 'Kullanıcı adı zorunlu!' });
+
+  const result = createBotInstance({
+    username, password, host: host || 'tm.knightnw.com',
+    port: port || 25565, version: version || '1.20.1',
+    autoChatMsg: autoChatMsg || '/is go', webhookUrl
+  });
+
+  if (result.success) res.json({ success: true, message: `${username} başlatıldı!` });
+  else res.status(400).json({ error: result.message });
+});
+
+app.get('/ping', (req, res) => res.send('Bot V2 Canlı!'));
+
 const PORT = process.env.PORT || 3000;
-
-app.use(express.json());
-
-// ==========================================
-// CONFIGURATION & GLOBAL STATE
-// ==========================================
-const CONFIG = {
-  host: process.env.MC_HOST || 'KnightNW.com',
-  port: parseInt(process.env.MC_PORT) || 25565,
-  username: process.env.MC_USERNAME || 'mistikhanim',
-  version: false
-};
-
-let bot = null;
-let farmerInterval = null;
-let antiAfkInterval = null;
-
-const botState = {
-  status: 'Başlatılıyor...',
-  health: 20,
-  food: 20,
-  position: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 },
-  selectedSlot: 0,
-  activeModule: 'Otomatik Çiftçi Aktif',
-  inventory: [],
-  nearbyPlayers: [],
-  chatHistory: [],
-  logs: []
-};
-
-// System Logging
-function addLog(msg) {
-  const time = new Date().toLocaleTimeString('tr-TR');
-  const entry = `[${time}] ${msg}`;
-  console.log(entry);
-  botState.logs.unshift(entry);
-  if (botState.logs.length > 80) botState.logs.pop();
-}
-
-function addChat(sender, message) {
-  const time = new Date().toLocaleTimeString('tr-TR');
-  botState.chatHistory.unshift({ time, sender, message });
-  if (botState.chatHistory.length > 50) botState.chatHistory.pop();
-}
+app.listen(PORT, () => console.log(`Minecraft Pro V2 Server Aktif: ${PORT}`));
