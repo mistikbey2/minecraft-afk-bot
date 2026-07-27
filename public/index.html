@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Minecraft Pro Ultimate Kontrol Paneli</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #11111b;
+      color: #cdd6f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      width: 100%;
+      max-width: 750px;
+    }
+    .card {
+      background: #1e1e2e;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      border: 1px solid #313244;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    h2, h3 {
+      text-align: center;
+      color: #a6e3a1;
+      margin: 0;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      background: #181825;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #45475a;
+      text-align: center;
+    }
+    .status-box {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .status-title {
+      font-size: 0.75em;
+      color: #a6adc8;
+      text-transform: uppercase;
+    }
+    .status-val {
+      font-size: 1.1em;
+      font-weight: bold;
+      color: #f9e2af;
+    }
+
+    .radar-box {
+      background: #181825;
+      border: 1px solid #45475a;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 0.85em;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .player-chip {
+      background: #313244;
+      border: 1px solid #89b4fa;
+      color: #89b4fa;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-weight: bold;
+    }
+
+    .macro-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+      gap: 8px;
+    }
+    .btn-macro {
+      background-color: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+      padding: 8px;
+      font-size: 0.85em;
+    }
+    .btn-macro:hover {
+      background-color: #45475a;
+      color: #89b4fa;
+    }
+
+    #chat-box {
+      background-color: #181825;
+      border: 1px solid #45475a;
+      border-radius: 8px;
+      height: 250px;
+      padding: 12px;
+      overflow-y: auto;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.88em;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .msg {
+      word-break: break-word;
+      line-height: 1.4;
+      border-bottom: 1px solid #28293d;
+      padding-bottom: 4px;
+    }
+    .bot-tag {
+      background: #45475a;
+      color: #f5e0dc;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      font-weight: bold;
+      margin-right: 6px;
+    }
+    .system { color: #f9e2af; }
+    .error { color: #f38ba8; font-weight: bold; }
+    .user-sent { color: #89b4fa; font-weight: bold; }
+    
+    .row {
+      display: flex;
+      gap: 10px;
+    }
+    input, select, button {
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #45475a;
+      background-color: #181825;
+      color: #cdd6f4;
+      font-size: 0.9em;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: #89b4fa; }
+    button {
+      background-color: #a6e3a1;
+      color: #11111b;
+      font-weight: bold;
+      cursor: pointer;
+      border: none;
+    }
+    button:hover { background-color: #94e2d5; }
+    .btn-danger { background-color: #f38ba8; color: #11111b; }
+    .btn-danger:hover { background-color: #eba0ac; }
+    .btn-secondary { background-color: #89b4fa; color: #11111b; }
+    .btn-secondary:hover { background-color: #b4befe; }
+    
+    .btn-attack { background-color: #f9e2af; color: #11111b; }
+    .btn-attack.active { background-color: #f38ba8; color: #11111b; animation: pulse 1.5s infinite; }
+    
+    .btn-treefarm { background-color: #a6e3a1; color: #11111b; }
+    .btn-treefarm.active { background-color: #a6e3a1; color: #11111b; animation: pulse 1.5s infinite; }
+
+    .btn-drop { background-color: #fab387; color: #11111b; padding: 4px 8px; font-size: 0.8em; margin-top: 4px; }
+    
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.6; }
+      100% { opacity: 1; }
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .inv-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      background: #181825;
+      border: 1px solid #45475a;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .inv-item {
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      gap: 4px;
+    }
+    .inv-item-name { color: #cdd6f4; font-size: 0.8em; font-weight: bold; word-break: break-word; }
+    .inv-item-count { color: #a6e3a1; font-size: 0.85em; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="card">
+      <h2>🤖 Multi-Bot Canlı Panel</h2>
+      
+      <!-- CANLI STATS -->
+      <div class="status-grid">
+        <div class="status-box">
+          <span class="status-title">Sağlık</span>
+          <span class="status-val" id="val-health">❤ 20</span>
+        </div>
+        <div class="status-box">
+          <span class="status-title">Açlık</span>
+          <span class="status-val" id="val-food">🍗 20</span>
+        </div>
+        <div class="status-box">
+          <span class="status-title">Seviye</span>
+          <span class="status-val" id="val-level">⭐ 0</span>
+        </div>
+        <div class="status-box">
+          <span class="status-title">Konum (XYZ)</span>
+          <span class="status-val" id="val-pos" style="font-size: 0.85em;">0, 0, 0</span>
+        </div>
+      </div>
+
+      <!-- OYUNCU RADARI -->
+      <div class="radar-box">
+        <span style="color: #a6adc8; font-weight: bold;">📡 Yakındaki Oyuncular:</span>
+        <div id="radar-list" style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span style="color: #6c7086;">Kimse yok</span>
+        </div>
+      </div>
+
+      <div id="chat-box">
+        <div class="msg system">[Sistem] Canlı chat akışı başlatıldı...</div>
+      </div>
+
+      <div class="row">
+        <select id="active-bot-select" style="width: 140px;">
+          <option value="">Bot Seç...</option>
+        </select>
+        <input type="text" id="message-input" style="flex: 1;" placeholder="Mesaj/Komut yazın (/is go vb.)..." />
+        <button id="send-btn">Gönder</button>
+      </div>
+
+      <!-- HIZLI MAKRO BUTONLARI -->
+      <div class="macro-grid" id="macro-container">
+        <button class="btn-macro" onclick="sendQuickCmd('/is go')">🏝️ Adaya Git</button>
+        <button class="btn-macro" onclick="sendQuickCmd('/is home')">🏠 Ada Evi</button>
+        <button class="btn-macro" onclick="sendQuickCmd('/balance')">💰 Bakiyem</button>
+        <button class="btn-macro" onclick="sendQuickCmd('/spawn')">📍 Spawn</button>
+        <button class="btn-macro" onclick="sendQuickCmd('/is top')">👑 Top 10</button>
+        <button class="btn-attack" id="attack-toggle-btn" onclick="toggleAttack()">⚔️ Mob Farm</button>
+        <button class="btn-treefarm" id="treefarm-toggle-btn" onclick="toggleTreeFarm()">🌳 Ağaç Farmı</button>
+      </div>
+
+      <!-- DİNAMİK ÖZEL MAKRO EKLEME -->
+      <div class="row" style="margin-top: 4px;">
+        <input type="text" id="custom-cmd-input" placeholder="Örn: /warp pazar" style="flex: 1;" />
+        <button onclick="addCustomMacro()" class="btn-secondary" style="font-size: 0.85em;">+ Hızlı Buton Ekle</button>
+      </div>
+    </div>
+
+    <!-- ENVANTER PANELİ -->
+    <div class="card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h3 style="margin:0;">🎒 Bot Envanteri</h3>
+        <div class="row">
+          <button id="refresh-inv-btn" class="btn-secondary">Envanteri Yenile</button>
+          <button id="drop-all-btn" class="btn-danger">Tümünü Yere At</button>
+        </div>
+      </div>
+      <div id="inventory-box" class="inv-grid">
+        <span style="color: #6c7086; grid-column: 1 / -1; text-align: center;">Bir bot seçip "Envanteri Yenile" butonuna basın.</span>
+      </div>
+    </div>
+
+    <!-- YENİ BOT EKLEME / ÇIKARMA PANELİ -->
+    <div class="card">
+      <h3>➕ Siteden Yeni Bot Ekle</h3>
+      <div class="form-grid">
+        <input type="text" id="new-username" placeholder="Bot Kullanıcı Adı (Zorunlu)" />
+        <input type="password" id="new-password" placeholder="Şifre (/login için)" />
+        <input type="text" id="new-host" value="tm.knightnw.com" placeholder="Sunucu IP" />
+        <input type="text" id="new-autochat" value="/is go" placeholder="Oto AFK Komutu" />
+      </div>
+      <div class="row">
+        <button id="add-bot-btn" style="flex: 1;">Botu Oyuna Sok</button>
+        <button id="remove-bot-btn" class="btn-danger">Seçili Botu Çıkar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const chatBox = document.getElementById('chat-box');
+    const activeBotSelect = document.getElementById('active-bot-select');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const inventoryBox = document.getElementById('inventory-box');
+    const refreshInvBtn = document.getElementById('refresh-inv-btn');
+    const dropAllBtn = document.getElementById('drop-all-btn');
+    const attackBtn = document.getElementById('attack-toggle-btn');
+    const treeFarmBtn = document.getElementById('treefarm-toggle-btn');
+    const radarList = document.getElementById('radar-list');
+
+    async function loadBotList() {
+      try {
+        const res = await fetch('/api/bots');
+        const bots = await res.json();
+        const currentVal = activeBotSelect.value;
+        
+        activeBotSelect.innerHTML = '<option value="">Bot Seç...</option>';
+        bots.forEach(b => {
+          const opt = document.createElement('option');
+          opt.value = b.username;
+          opt.textContent = b.username;
+          activeBotSelect.appendChild(opt);
+        });
+
+        if (currentVal && bots.some(b => b.username === currentVal)) {
+          activeBotSelect.value = currentVal;
+        } else if (bots.length > 0) {
+          activeBotSelect.value = bots[0].username;
+        }
+      } catch (e) {}
+    }
+
+    loadBotList();
+
+    const eventSource = new EventSource('/api/chat-stream');
+
+    eventSource.onmessage = function(event) {
+      const data = JSON.parse(event.data);
+      
+      const msgElement = document.createElement('div');
+      msgElement.className = 'msg ' + (data.type || '');
+
+      const tag = document.createElement('span');
+      tag.className = 'bot-tag';
+      tag.textContent = data.botName;
+
+      msgElement.appendChild(tag);
+      msgElement.appendChild(document.createTextNode(data.message));
+      
+      chatBox.appendChild(msgElement);
+      chatBox.scrollTop = chatBox.scrollHeight;
+
+      loadBotList();
+    };
+
+    async function updateBotStatus() {
+      const botName = activeBotSelect.value;
+      if (!botName) return;
+
+      try {
+        const res = await fetch(`/api/status/${botName}`);
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('val-health').textContent = `❤ ${data.health}`;
+          document.getElementById('val-food').textContent = `🍗 ${data.food}`;
+          document.getElementById('val-level').textContent = `⭐ ${data.level}`;
+          document.getElementById('val-pos').textContent = `${data.pos.x}, ${data.pos.y}, ${data.pos.z}`;
+
+          if (data.isAttacking) {
+            attackBtn.classList.add('active');
+            attackBtn.textContent = '⚔️ Mob Farm Açık';
+          } else {
+            attackBtn.classList.remove('active');
+            attackBtn.textContent = '⚔️ Mob Farm';
+          }
+
+          if (data.isTreeFarming) {
+            treeFarmBtn.classList.add('active');
+            treeFarmBtn.textContent = '🌳 Ağaç Farmı Açık (Durdur)';
+          } else {
+            treeFarmBtn.classList.remove('active');
+            treeFarmBtn.textContent = '🌳 Ağaç Farmı';
+          }
+
+          if (data.nearbyPlayers && data.nearbyPlayers.length > 0) {
+            radarList.innerHTML = data.nearbyPlayers.map(p => 
+              `<span class="player-chip">👤 ${p.username} (${p.distance}m)</span>`
+            ).join('');
+          } else {
+            radarList.innerHTML = '<span style="color: #6c7086;">Yakında oyuncu yok</span>';
+          }
+        }
+      } catch(e) {}
+    }
+
+    setInterval(updateBotStatus, 2000);
+
+    async function toggleAttack() {
+      const botName = activeBotSelect.value;
+      if (!botName) return alert('Lütfen önce bir bot seçin!');
+
+      const res = await fetch('/api/toggle-attack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName })
+      });
+
+      if (res.ok) updateBotStatus();
+    }
+
+    async function toggleTreeFarm() {
+      const botName = activeBotSelect.value;
+      if (!botName) return alert('Lütfen önce bir bot seçin!');
+
+      const res = await fetch('/api/toggle-treefarm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName })
+      });
+
+      if (res.ok) updateBotStatus();
+    }
+
+    function addCustomMacro() {
+      const input = document.getElementById('custom-cmd-input');
+      const cmd = input.value.trim();
+      if (!cmd) return alert('Lütfen bir komut girin!');
+
+      const btn = document.createElement('button');
+      btn.className = 'btn-macro';
+      btn.textContent = `⚡ ${cmd}`;
+      btn.onclick = () => sendQuickCmd(cmd);
+
+      document.getElementById('macro-container').appendChild(btn);
+      input.value = '';
+    }
+
+    async function sendQuickCmd(cmd) {
+      const botName = activeBotSelect.value;
+      if (!botName) return alert('Lütfen önce bir bot seçin!');
+
+      await fetch('/api/send-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName, message: cmd })
+      });
+    }
+
+    async function fetchInventory() {
+      const botName = activeBotSelect.value;
+      if (!botName) return alert('Lütfen önce bir bot seçin!');
+
+      inventoryBox.innerHTML = '<span style="color: #6c7086; grid-column: 1 / -1; text-align: center;">Envanter yükleniyor...</span>';
+
+      try {
+        const res = await fetch(`/api/inventory/${botName}`);
+        const data = await res.json();
+
+        if (res.ok) {
+          inventoryBox.innerHTML = '';
+          if (data.items.length === 0) {
+            inventoryBox.innerHTML = '<span style="color: #f38ba8; grid-column: 1 / -1; text-align: center;">Envanter tamamen boş!</span>';
+            return;
+          }
+
+          data.items.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'inv-item';
+            div.innerHTML = `
+              <div class="inv-item-name">${item.displayName || item.name}</div>
+              <div class="inv-item-count">x${item.count}</div>
+              <button class="btn-drop" onclick="dropSingleItem('${botName}', ${item.slot})">Yere At</button>
+            `;
+            inventoryBox.appendChild(div);
+          });
+        } else {
+          inventoryBox.innerHTML = `<span style="color: #f38ba8; grid-column: 1 / -1; text-align: center;">${data.error}</span>`;
+        }
+      } catch (e) {
+        inventoryBox.innerHTML = '<span style="color: #f38ba8; grid-column: 1 / -1; text-align: center;">Envanter alınırken hata oluştu.</span>';
+      }
+    }
+
+    async function dropSingleItem(botName, slot) {
+      const res = await fetch('/api/drop-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName, slot })
+      });
+
+      if (res.ok) setTimeout(fetchInventory, 400);
+    }
+
+    dropAllBtn.addEventListener('click', async () => {
+      const botName = activeBotSelect.value;
+      if (!botName) return alert('Lütfen önce bir bot seçin!');
+
+      if (!confirm(`${botName} botunun envanterindeki TÜM eşyalar yere atılacak. Onaylıyor musun?`)) return;
+
+      const res = await fetch('/api/drop-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName })
+      });
+
+      if (res.ok) setTimeout(fetchInventory, 800);
+    });
+
+    refreshInvBtn.addEventListener('click', fetchInventory);
+
+    activeBotSelect.addEventListener('change', () => {
+      if (activeBotSelect.value) {
+        fetchInventory();
+        updateBotStatus();
+      }
+    });
+
+    sendBtn.addEventListener('click', async () => {
+      const botName = activeBotSelect.value;
+      const msg = messageInput.value.trim();
+      if (!botName) return alert('Lütfen önce bir bot seçin!');
+      if (!msg) return;
+
+      const res = await fetch('/api/send-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName, message: msg })
+      });
+
+      if (res.ok) messageInput.value = '';
+    });
+
+    document.getElementById('add-bot-btn').addEventListener('click', async () => {
+      const username = document.getElementById('new-username').value.trim();
+      const password = document.getElementById('new-password').value.trim();
+      const host = document.getElementById('new-host').value.trim();
+      const autoChatMsg = document.getElementById('new-autochat').value.trim();
+
+      if (!username) return alert('Kullanıcı adı yazmalısın!');
+
+      const res = await fetch('/api/add-bot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, host, autoChatMsg })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message);
+        document.getElementById('new-username').value = '';
+        document.getElementById('new-password').value = '';
+        loadBotList();
+      } else {
+        alert(data.error || 'Bot eklenemedi!');
+      }
+    });
+
+    document.getElementById('remove-bot-btn').addEventListener('click', async () => {
+      const botName = activeBotSelect.value;
+      if (!botName) return alert('Lütfen çıkarılacak botu seçin!');
+
+      if (!confirm(`${botName} botunu oyundan çıkarmak istediğine emin misin?`)) return;
+
+      const res = await fetch('/api/remove-bot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: botName })
+      });
+
+      if (res.ok) loadBotList();
+    });
+  </script>
+</body>
+</html>
