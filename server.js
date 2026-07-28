@@ -9,8 +9,19 @@ const CONFIG = {
   port: parseInt(process.env.BOT_PORT) || 25565,
   username: process.env.BOT_USERNAME || 'mistikhanim',
   password: process.env.BOT_PASSWORD || 'salakmustafa',
-  version: process.env.BOT_VERSION || '1.21.1', // 1.21+ sürümleri için
-  reconnectDelay: 10000, // Koparsa 10s sonra tekrar dener
+  version: '1.16.5',
+  reconnectDelay: 12000,
+  
+  // AUTO CHAT AYARLARI
+  autoChatEnabled: true,
+  autoChatInterval: 120000, // Kaç milisaniyede bir yazsın? (120000ms = 2 Dakika)
+  autoChatMessages: [
+    'sa',
+    'kolay gelsin beyler',
+    'afkyim',
+    'hb',
+    'iyi oyunlar herkese'
+  ]
 };
 
 // ================= EXPRESS & SOCKET.IO =================
@@ -21,6 +32,7 @@ const PORT = process.env.PORT || 3000;
 
 let bot = null;
 let antiAfkInterval = null;
+let autoChatTimer = null;
 
 // Render / Railway Keep-Alive
 app.get('/', (req, res) => {
@@ -40,34 +52,45 @@ function createBot() {
     port: CONFIG.port,
     username: CONFIG.username,
     version: CONFIG.version,
+    checkTimeoutInterval: 60000,
   });
 
   bot.once('spawn', () => {
-    console.log('[BOT] Oyuna giriş yapıldı!');
-    emitStatus('Bağlandı');
+    console.log('[BOT] Oyuna giriş yapıldı! Komut akışı başlatılıyor...');
+    emitStatus('Bağlandı - Giriş Yapılıyor');
 
-    // Otomatik Giriş ve Rota Komutları
+    // 1. /login
     setTimeout(() => {
       bot.chat(`/login ${CONFIG.password}`);
-      console.log('[BOT] /login komutu gönderildi.');
-    }, 2000);
+      console.log('[BOT] /login gönderildi.');
+    }, 4000);
 
+    // 2. /skyblock
     setTimeout(() => {
       bot.chat('/skyblock');
-      console.log('[BOT] /skyblock komutu gönderildi.');
-    }, 5000);
+      console.log('[BOT] /skyblock gönderildi.');
+    }, 9000);
 
+    // 3. /is go
     setTimeout(() => {
       bot.chat('/is go');
-      console.log('[BOT] /is go komutu gönderildi.');
-    }, 8000);
+      console.log('[BOT] /is go gönderildi.');
+      emitStatus('Adaya Geçildi (AFK)');
+    }, 14000);
 
-    // Anti-AFK Döngüsü (Zıplama & Bakış Değiştirme)
+    // 4. Anti-AFK ve Auto-Chat Başlat
     startAntiAFK();
+
+    setTimeout(() => {
+      if (CONFIG.autoChatEnabled) {
+        startAutoChat();
+      }
+    }, 20000); // Adaya iyice oturduktan 20sn sonra chat yazmaya başlar
   });
 
   // Chat Dinleyici
   bot.on('chat', (username, message) => {
+    console.log(`[CHAT] <${username}> ${message}`);
     io.emit('chat_message', { type: 'chat', sender: username, text: message });
   });
 
@@ -78,7 +101,6 @@ function createBot() {
     }
   });
 
-  // Can ve Açlık Güncellemesi
   bot.on('health', () => {
     io.emit('bot_stats', {
       health: bot.health,
@@ -87,27 +109,27 @@ function createBot() {
     });
   });
 
-  // Bağlantı Kopma & Hata Durumları
   bot.on('kicked', (reason) => {
-    console.log('[BOT] Sunucudan atıldı:', reason);
-    emitStatus('Atıldı: ' + JSON.stringify(reason));
-    stopAntiAFK();
+    let cleanReason = typeof reason === 'string' ? reason : JSON.stringify(reason);
+    console.log('[KICKED] Sunucudan atıldı:', cleanReason);
+    emitStatus('Atıldı: ' + cleanReason);
+    stopTimers();
   });
 
   bot.on('error', (err) => {
-    console.error('[BOT] Hata oluştu:', err.message);
+    console.error('[HATA]', err.message);
     emitStatus('Hata: ' + err.message);
   });
 
   bot.on('end', () => {
-    console.log(`[BOT] Bağlantı koptu. ${CONFIG.reconnectDelay / 1000} saniye sonra tekrar deneniyor...`);
-    emitStatus('Bağlantı Koptu - Tekrar Deneniyor...');
-    stopAntiAFK();
+    console.log(`[BOT] Bağlantı koptu. ${CONFIG.reconnectDelay / 1000}s sonra tekrar deneniyor...`);
+    emitStatus('Koptu - Yeniden Deneniyor');
+    stopTimers();
     setTimeout(createBot, CONFIG.reconnectDelay);
   });
 }
 
-// ================= HELPER FUNCTIONS =================
+// ================= TIMERS & AUTO-CHAT =================
 function startAntiAFK() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
   antiAfkInterval = setInterval(() => {
@@ -122,8 +144,23 @@ function startAntiAFK() {
   }, 15000);
 }
 
-function stopAntiAFK() {
+function startAutoChat() {
+  if (autoChatTimer) clearInterval(autoChatTimer);
+  console.log('[AUTO-CHAT] Otomatik mesajlaşma aktif.');
+
+  autoChatTimer = setInterval(() => {
+    if (bot && bot.entity) {
+      const msgs = CONFIG.autoChatMessages;
+      const randomMsg = msgs[Math.floor(Math.random() * msgs.length)];
+      bot.chat(randomMsg);
+      console.log(`[AUTO-CHAT GÖNDERİLDİ] ${randomMsg}`);
+    }
+  }, CONFIG.autoChatInterval);
+}
+
+function stopTimers() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
+  if (autoChatTimer) clearInterval(autoChatTimer);
 }
 
 function emitStatus(status) {
@@ -132,8 +169,6 @@ function emitStatus(status) {
 
 // ================= SOCKET.IO CLIENT EVENTS =================
 io.on('connection', (socket) => {
-  console.log('[PANEL] Kullanıcı bağlandı.');
-
   if (bot && bot.entity) {
     socket.emit('bot_stats', {
       health: bot.health,
@@ -158,7 +193,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ================= DASHBOARD UI (HTML/CSS) =================
+// ================= DASHBOARD UI =================
 function getDashboardHTML() {
   return `
   <!DOCTYPE html>
@@ -180,7 +215,6 @@ function getDashboardHTML() {
       #chat-box { flex: 1; background: #121214; border-radius: 6px; padding: 10px; overflow-y: auto; font-family: monospace; font-size: 0.9rem; border: 1px solid #323238; }
       .chat-line { margin-bottom: 4px; word-break: break-word; }
       .chat-system { color: #8d8d99; }
-      .chat-user { color: #50a14f; font-weight: bold; }
       .input-group { display: flex; gap: 10px; }
       input { flex: 1; background: #121214; border: 1px solid #323238; color: #fff; padding: 10px; border-radius: 6px; outline: none; }
       button { background: #00b37e; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-weight: bold; }
