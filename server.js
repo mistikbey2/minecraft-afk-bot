@@ -3,29 +3,25 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 
+// Process Çökme Korumaları
+process.on('uncaughtException', (err) => console.error('[KRİTİK HATA] Uncaught:', err.message));
+process.on('unhandledRejection', (err) => console.error('[KRİTİK HATA] Unhandled:', err));
+
 // ================= CONFIGURATION =================
 const CONFIG = {
   host: process.env.BOT_HOST || 'play.knightnw.com',
   port: parseInt(process.env.BOT_PORT) || 25565,
   username: process.env.BOT_USERNAME || 'mistikhanim',
   password: process.env.BOT_PASSWORD || 'salakmustafa',
-  version: '1.16.5',
-  reconnectDelay: 12000,
+  version: false,
+  reconnectDelay: 30000,
   
-  // AUTO CHAT AYARLARI
   autoChatEnabled: true,
-  autoChatInterval: 120000, // 2 dakikada bir sohbet mesajı
-  autoChatMessages: [
-    'sa',
-    'kolay gelsin beyler',
-    'afkyim',
-    'hb',
-    'iyi oyunlar herkese'
-  ],
+  autoChatInterval: 180000, // 3 Dakika
+  autoChatMessages: ['sa', 'kolay gelsin beyler', 'afkyim', 'hb'],
 
-  // ÇİFTÇİ OTO SATIŞ AYARLARI
   farmerEnabled: true,
-  farmerInterval: 10 * 60 * 1000 // 10 Dakikada bir (Render dostu)
+  farmerInterval: 10 * 60 * 1000 // 10 Dakikada bir otomatik sat
 };
 
 // ================= EXPRESS & SOCKET.IO =================
@@ -39,66 +35,64 @@ let antiAfkInterval = null;
 let autoChatTimer = null;
 let farmerTimer = null;
 
-// Render Keep-Alive
-app.get('/', (req, res) => {
-  res.send(getDashboardHTML());
-});
-
-app.get('/ping', (req, res) => {
-  res.status(200).send('OK - Bot Alive');
-});
+app.get('/', (req, res) => res.send(getDashboardHTML()));
+app.get('/ping', (req, res) => res.status(200).send('OK - Bot Alive'));
 
 // ================= MINEFLAYER BOT CREATION =================
 function createBot() {
   console.log(`[BOT] ${CONFIG.host} sunucusuna (${CONFIG.username}) bağlanılıyor...`);
+  emitStatus('Sunucuya Bağlanılıyor...');
 
-  bot = mineflayer.createBot({
-    host: CONFIG.host,
-    port: CONFIG.port,
-    username: CONFIG.username,
-    version: CONFIG.version,
-    checkTimeoutInterval: 60000,
-  });
+  try {
+    bot = mineflayer.createBot({
+      host: CONFIG.host,
+      port: CONFIG.port,
+      username: CONFIG.username,
+      version: CONFIG.version,
+      checkTimeoutInterval: 90000,
+    });
+  } catch (err) {
+    console.error('[BOT OLUŞTURMA HATASI]', err.message);
+    scheduleReconnect();
+    return;
+  }
 
   bot.once('spawn', () => {
-    console.log('[BOT] Oyuna giriş yapıldı! Komutlar başlatılıyor...');
+    console.log('[BOT] Oyuna başarıyla giriş yapıldı!');
     emitStatus('Bağlandı - Giriş Yapılıyor');
 
-    // 1. Otomatik Giriş ve Rota
     setTimeout(() => {
       bot.chat(`/login ${CONFIG.password}`);
       console.log('[BOT] /login gönderildi.');
-    }, 4000);
+    }, 5000);
 
     setTimeout(() => {
       bot.chat('/skyblock');
       console.log('[BOT] /skyblock gönderildi.');
-    }, 9000);
+    }, 10000);
 
     setTimeout(() => {
       bot.chat('/is go');
       console.log('[BOT] /is go gönderildi.');
       emitStatus('Adaya Geçildi (AFK)');
-    }, 14000);
+    }, 15000);
 
-    // 2. Zamanlayıcıları Başlat
     startAntiAFK();
 
     setTimeout(() => {
       if (CONFIG.autoChatEnabled) startAutoChat();
       if (CONFIG.farmerEnabled) startFarmerAutoSell();
-    }, 20000); // Adaya oturduktan 20sn sonra başlar
+    }, 25000);
   });
 
-  // Chat Dinleyici
   bot.on('chat', (username, message) => {
-    console.log(`[CHAT] <${username}> ${message}`);
     io.emit('chat_message', { type: 'chat', sender: username, text: message });
   });
 
   bot.on('message', (jsonMsg) => {
     const rawText = jsonMsg.toString();
     if (rawText.trim()) {
+      console.log(`[SUNUCU] ${rawText}`);
       io.emit('chat_message', { type: 'system', text: rawText });
     }
   });
@@ -123,12 +117,20 @@ function createBot() {
     emitStatus('Hata: ' + err.message);
   });
 
-  bot.on('end', () => {
-    console.log(`[BOT] Bağlantı koptu. ${CONFIG.reconnectDelay / 1000}s sonra tekrar deneniyor...`);
-    emitStatus('Koptu - Yeniden Deneniyor');
+  bot.on('end', (reason) => {
+    console.log(`[BOT] Bağlantı koptu (${reason}). ${CONFIG.reconnectDelay / 1000}s sonra tekrar deneniyor...`);
+    emitStatus(`Koptu (${reason}) - Bekleniyor...`);
     stopTimers();
-    setTimeout(createBot, CONFIG.reconnectDelay);
+    scheduleReconnect();
   });
+}
+
+function scheduleReconnect() {
+  if (bot) {
+    bot.removeAllListeners();
+    bot = null;
+  }
+  setTimeout(createBot, CONFIG.reconnectDelay);
 }
 
 // ================= MODÜLLER =================
@@ -143,7 +145,7 @@ function startAntiAFK() {
       const pitch = (Math.random() - 0.5) * Math.PI;
       bot.look(yaw, pitch, true);
     }
-  }, 15000);
+  }, 20000);
 }
 
 function startAutoChat() {
@@ -158,88 +160,91 @@ function startAutoChat() {
   }, CONFIG.autoChatInterval);
 }
 
-// ================= 2 AŞAMALI ÇİFTÇİ KAKAO SATIŞ MODÜLÜ =================
 function startFarmerAutoSell() {
   if (farmerTimer) clearInterval(farmerTimer);
-
-  // İlk satışı başlat, sonra 10 dakikada bir çalıştır
   sellCocoaBeans();
-
-  farmerTimer = setInterval(() => {
-    sellCocoaBeans();
-  }, CONFIG.farmerInterval);
+  farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval);
 }
 
+// ================= ZİNCİRLEME ÇİFTÇİ SATIŞ MODÜLÜ =================
 async function sellCocoaBeans() {
   if (!bot || !bot.entity) return;
 
-  console.log('[ÇİFTÇİ] Kakao satış süreci başlatıldı...');
+  console.log('[ÇİFTÇİ] Satış döngüsü başlatıldı. /çiftçi yazılıyor...');
 
-  const onWindowOpen = async (window) => {
-    console.log(`[ÇİFTÇİ] Menü açıldı! Eşyalar taranıyor...`);
+  const windowHandler = async (window) => {
+    let windowTitle = 'Menü';
+    try {
+      windowTitle = window.title ? (JSON.parse(window.title).text || window.title) : 'Menü';
+    } catch(e) {
+      windowTitle = window.title || 'Menü';
+    }
 
-    // Konsola menü içeriğini dök (Debug için)
-    const itemsDebug = window.slots
-      .filter(i => i)
-      .map(i => `[Slot ${i.slot}: ${i.name}]`)
-      .join(', ');
-    console.log('[MENÜ İÇERİĞİ]:', itemsDebug);
+    console.log(`\n================ [MENÜ AÇILDI: "${windowTitle}"] ================`);
 
-    await new Promise(r => setTimeout(r, 1200)); // Anti-cheat gecikmesi
+    // Anti-Cheat / Lag Tıklama Beklemesi (1.2 saniye)
+    await new Promise(r => setTimeout(r, 1200));
 
-    // 1. ADIM: Sandık / Depo simgesi var mı?
-    const chestItem = window.slots.find(item => 
-      item && (
-        item.name.includes('chest') || 
-        item.name.includes('shulker') ||
-        (item.customName && (item.customName.toLowerCase().includes('sandık') || item.customName.toLowerCase().includes('depo') || item.customName.toLowerCase().includes('ürün')))
-      )
-    );
+    // Menü içeriğini dök (Debug)
+    const filledSlots = window.slots.filter(s => s != null);
+    console.log(`[MENÜ İÇERİĞİ - ${filledSlots.length} Eşya]:`);
+    filledSlots.forEach(s => {
+      const name = s.name || '';
+      const custom = s.customName || s.displayName || '';
+      console.log(` -> Slot ${s.slot}: id="${name}" | Isim="${custom}"`);
+    });
 
-    // 2. ADIM: Kakao Çekirdeği simgesi var mı?
-    const cocoaItem = window.slots.find(item => 
-      item && (
-        item.name.includes('cocoa') || 
-        item.name.includes('brown_dye') ||
-        item.name.includes('bean') ||
-        (item.customName && item.customName.toLowerCase().includes('kakao'))
-      )
-    );
+    // 1. AŞAMA: Kakao / Hepsini Sat / Tümünü Sat Butonu Var mı?
+    const sellTarget = window.slots.find(s => s && (
+      s.name.includes('cocoa') ||
+      s.name.includes('brown_dye') ||
+      s.name.includes('bean') ||
+      (s.customName && (s.customName.toLowerCase().includes('kakao') || s.customName.toLowerCase().includes('hepsini sat') || s.customName.toLowerCase().includes('tümünü sat') || s.customName.toLowerCase().includes('depoyu sat'))) ||
+      (s.displayName && (s.displayName.toLowerCase().includes('kakao') || s.displayName.toLowerCase().includes('hepsini sat') || s.displayName.toLowerCase().includes('tümünü sat')))
+    ));
 
-    if (cocoaItem) {
-      // Doğrudan kakao görüldüyse sol tık yap ve sat
-      console.log(`[ÇİFTÇİ] Kakao simgesi bulundu (Slot ${cocoaItem.slot}). Sol tık yapılıyor...`);
+    if (sellTarget) {
+      console.log(`[ÇİFTÇİ] Satış/Kakao butonu tespit edildi! Slot: ${sellTarget.slot}. Tıklanıyor...`);
       try {
-        await bot.clickWindow(cocoaItem.slot, 0, 0); // 0 = Sol Tık
-        console.log('[ÇİFTÇİ] Kakao satma tıklaması gönderildi!');
+        await bot.clickWindow(sellTarget.slot, 0, 0); // Sol Tık
+        console.log(`[ÇİFTÇİ] Slot ${sellTarget.slot} başarıyla tıklandı.`);
       } catch (err) {
         console.error('[ÇİFTÇİ] Tıklama hatası:', err.message);
       }
-      setTimeout(() => { try { bot.closeWindow(window); } catch(e){} }, 1000);
-
-    } else if (chestItem) {
-      // Eğer önce Sandık/Depo menüsüne girmek gerekiyorsa
-      console.log(`[ÇİFTÇİ] Sandık/Depo simgesi bulundu (Slot ${chestItem.slot}). Giriş yapılıyor...`);
-      try {
-        await bot.clickWindow(chestItem.slot, 0, 0);
-      } catch (err) {
-        console.error('[ÇİFTÇİ] Sandık tıklama hatası:', err.message);
-      }
-    } else {
-      console.log('[ÇİFTÇİ] Menüde ne sandık ne de kakao bulunabildi.');
+      return;
     }
+
+    // 2. AŞAMA: Depo / Sandık / Ürünler Butonu Var mı?
+    const storageTarget = window.slots.find(s => s && (
+      s.name.includes('chest') ||
+      s.name.includes('shulker') ||
+      s.name.includes('barrel') ||
+      s.name.includes('hopper') ||
+      (s.customName && (s.customName.toLowerCase().includes('depo') || s.customName.toLowerCase().includes('ürün') || s.customName.toLowerCase().includes('sandık'))) ||
+      (s.displayName && (s.displayName.toLowerCase().includes('depo') || s.displayName.toLowerCase().includes('ürün') || s.displayName.toLowerCase().includes('sandık')))
+    ));
+
+    if (storageTarget) {
+      console.log(`[ÇİFTÇİ] Depo/Alt Menü butonu tespit edildi! Slot: ${storageTarget.slot}. Alt menüye giriliyor...`);
+      try {
+        await bot.clickWindow(storageTarget.slot, 0, 0);
+      } catch (err) {
+        console.error('[ÇİFTÇİ] Alt menü tıklama hatası:', err.message);
+      }
+      return;
+    }
+
+    console.log('[ÇİFTÇİ] Bu menüde kakao veya depo ikonu eşleşmedi.');
   };
 
-  // Dinleyiciyi bağla
-  bot.on('windowOpen', onWindowOpen);
-
-  // Komutu gönder
+  // Dinleyiciyi bağla (15 saniye boyunca açık tutar)
+  bot.on('windowOpen', windowHandler);
   bot.chat('/çiftçi');
 
-  // 12 saniye sonra dinleyiciyi kaldır (çakışmaları önlemek için)
+  // 15 saniye sonra dinleyiciyi temizle
   setTimeout(() => {
-    bot.removeListener('windowOpen', onWindowOpen);
-  }, 12000);
+    if (bot) bot.removeListener('windowOpen', windowHandler);
+  }, 15000);
 }
 
 function stopTimers() {
@@ -262,19 +267,37 @@ io.on('connection', (socket) => {
     });
   }
 
-  socket.on('send_command', (cmd) => {
-    if (bot && cmd) {
-      bot.chat(cmd);
-      console.log(`[PANEL -> BOT] Komut atıldı: ${cmd}`);
+  socket.on('send_command', async (cmd) => {
+    if (!bot) return;
+
+    // Özel Komut: /clickslot <slot_no> (Web panelden menüdeki slot'a zorla tıklama)
+    if (cmd.startsWith('/clickslot')) {
+      const parts = cmd.split(' ');
+      const slotNum = parseInt(parts[1]);
+      if (!isNaN(slotNum) && bot.currentWindow) {
+        try {
+          await bot.clickWindow(slotNum, 0, 0);
+          console.log(`[PANEL] Açık olan menünün ${slotNum}. slotuna tıklatıldı.`);
+        } catch(e) {
+          console.error('[PANEL] Slot tıklama hatası:', e.message);
+        }
+      } else {
+        console.log('[PANEL] Tıklanacak aktif bir menü bulunamadı veya slot geçersiz.');
+      }
+      return;
     }
+
+    // Özel Komut: /sat (Elle satış tetikleme)
+    if (cmd === '/sat') {
+      sellCocoaBeans();
+      return;
+    }
+
+    bot.chat(cmd);
   });
 
   socket.on('force_reconnect', () => {
-    if (bot) {
-      bot.quit();
-    } else {
-      createBot();
-    }
+    scheduleReconnect();
   });
 });
 
@@ -306,6 +329,7 @@ function getDashboardHTML() {
       button:hover { background: #00875f; }
       .btn-danger { background: #f75a68; }
       .btn-danger:hover { background: #ce404d; }
+      .btn-warning { background: #e0a96d; color: #121214; }
     </style>
   </head>
   <body>
@@ -320,6 +344,7 @@ function getDashboardHTML() {
         <div class="stat-row"><span>Can:</span><strong id="health">20 / 20</strong></div>
         <div class="stat-row"><span>Açlık:</span><strong id="food">20 / 20</strong></div>
         <div class="stat-row"><span>Konum (XYZ):</span><strong id="pos">0, 0, 0</strong></div>
+        <button class="btn-warning" onclick="manualSell()">Anlık Kakao Sat Yap (/sat)</button>
         <button class="btn-danger" onclick="reconnect()">Yeniden Bağlan</button>
       </div>
 
@@ -327,7 +352,7 @@ function getDashboardHTML() {
         <h3>Canlı Oyun Chat & Konsol</h3>
         <div id="chat-box"></div>
         <div class="input-group">
-          <input type="text" id="cmd-input" placeholder="Komut veya mesaj yazın..." onkeydown="if(event.key==='Enter') sendCmd()">
+          <input type="text" id="cmd-input" placeholder="Komut yazın veya slot tıklayın (/clickslot 13)..." onkeydown="if(event.key==='Enter') sendCmd()">
           <button onclick="sendCmd()">Gönder</button>
         </div>
       </div>
@@ -363,6 +388,10 @@ function getDashboardHTML() {
           socket.emit('send_command', input.value.trim());
           input.value = '';
         }
+      }
+
+      function manualSell() {
+        socket.emit('send_command', '/sat');
       }
 
       function reconnect() {
