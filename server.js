@@ -1,290 +1,262 @@
-const express = require('express');
 const mineflayer = require('mineflayer');
-const { pathfinder, movements } = require('mineflayer-pathfinder');
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 
+// ================= CONFIGURATION =================
+const CONFIG = {
+  host: process.env.BOT_HOST || 'play.knightnw.com',
+  port: parseInt(process.env.BOT_PORT) || 25565,
+  username: process.env.BOT_USERNAME || 'mistikhanim',
+  password: process.env.BOT_PASSWORD || 'salakmustafa',
+  version: process.env.BOT_VERSION || '1.21.1', // 1.21+ sürümleri için
+  reconnectDelay: 10000, // Koparsa 10s sonra tekrar dener
+};
+
+// ================= EXPRESS & SOCKET.IO =================
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
-
-// ==========================================
-// CONFIGURATION & GLOBAL STATE
-// ==========================================
-const CONFIG = {
-  host: process.env.MC_HOST || 'KnightNW.com',
-  port: parseInt(process.env.MC_PORT) || 25565,
-  username: process.env.MC_USERNAME || 'mistikhanim',
-  version: false
-};
-
 let bot = null;
-let farmerInterval = null;
+let antiAfkInterval = null;
 
-const botState = {
-  status: 'Başlatılıyor...',
-  health: 20,
-  food: 20,
-  position: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 },
-  selectedSlot: 0,
-  activeModule: 'Otomatik Çiftçi Aktif',
-  inventory: [],
-  nearbyPlayers: [],
-  chatHistory: [],
-  logs: []
-};
+// Render / Railway Keep-Alive
+app.get('/', (req, res) => {
+  res.send(getDashboardHTML());
+});
 
-function addLog(msg) {
-  const time = new Date().toLocaleTimeString('tr-TR');
-  const entry = `[${time}] ${msg}`;
-  console.log(entry);
-  botState.logs.unshift(entry);
-  if (botState.logs.length > 80) botState.logs.pop();
-}
+app.get('/ping', (req, res) => {
+  res.status(200).send('OK - Bot Alive');
+});
 
-function addChat(sender, message) {
-  const time = new Date().toLocaleTimeString('tr-TR');
-  botState.chatHistory.unshift({ time, sender, message });
-  if (botState.chatHistory.length > 50) botState.chatHistory.pop();
-}
-
-// ==========================================
-// OTOMATİK ÇİFTÇİ KAKAO SATIŞ SİSTEMİ
-// ==========================================
-function startFarmerAutoSell() {
-  if (farmerInterval) clearInterval(farmerInterval);
-
-  addLog('🌾 Otomatik Çiftçi Kakao sistemi devrede! (Her 10 dk bir çalışacak)');
-
-  // Oyuna girdikten 10 saniye sonra ilk satışı tetikler
-  setTimeout(() => {
-    executeFarmerSell();
-  }, 10000);
-
-  // Her 10 dakikada bir tekrarlar
-  farmerInterval = setInterval(() => {
-    executeFarmerSell();
-  }, 10 * 60 * 1000);
-}
-
-async function executeFarmerSell() {
-  if (!bot || !bot.entity) {
-    addLog('Bot oyunda olmadığı için çiftçi satışı atlandı.');
-    return;
-  }
-
-  addLog('/çiftçi komutu gönderiliyor...');
-  bot.chat('/çiftçi');
-
-  bot.once('windowOpen', async (window) => {
-    addLog('Çiftçi menüsü açıldı, Zümrüt aranıyor...');
-
-    const emeraldItem = window.items().find(i => 
-      i.name.includes('emerald') || 
-      (i.customName && i.customName.toLowerCase().includes('zümrüt'))
-    );
-
-    if (!emeraldItem) {
-      addLog('Hata: Çiftçi menüsünde Zümrüt bulunamadı!');
-      try { bot.closeWindow(window); } catch(e){}
-      return;
-    }
-
-    try {
-      await bot.clickWindow(emeraldItem.slot, 0, 0);
-      addLog('Zümrüte tıklandı, Satış menüsü bekleniyor...');
-
-      bot.once('windowOpen', async (nextWindow) => {
-        addLog('Satış menüsü açıldı, Kakao Çekirdeği aranıyor...');
-
-        const cocoaItem = nextWindow.items().find(i => 
-          i.name.includes('cocoa') || 
-          i.name.includes('bean') ||
-          (i.customName && i.customName.toLowerCase().includes('kakao'))
-        );
-
-        if (!cocoaItem) {
-          addLog('Hata: Menüde Kakao Çekirdeği bulunamadı!');
-          try { bot.closeWindow(nextWindow); } catch(e){}
-          return;
-        }
-
-        await bot.clickWindow(cocoaItem.slot, 0, 0);
-        addLog('✅ Kakao Çekirdeğine sol tık yapıldı ve satış tamamlandı!');
-
-        setTimeout(() => {
-          try { bot.closeWindow(nextWindow); } catch (e) {}
-        }, 1000);
-      });
-
-    } catch (err) {
-      addLog(`Çiftçi menü tıklama hatası: ${err.message}`);
-    }
-  });
-}
-
-// ==========================================
-// MINEFLAYER BOT
-// ==========================================
+// ================= MINEFLAYER BOT CREATION =================
 function createBot() {
-  addLog('Bot sunucuya bağlanıyor...');
-  
+  console.log(`[BOT] ${CONFIG.host} sunucusuna (${CONFIG.username}) bağlanılıyor...`);
+
   bot = mineflayer.createBot({
     host: CONFIG.host,
     port: CONFIG.port,
     username: CONFIG.username,
-    version: CONFIG.version
+    version: CONFIG.version,
   });
 
-  bot.loadPlugin(pathfinder);
+  bot.once('spawn', () => {
+    console.log('[BOT] Oyuna giriş yapıldı!');
+    emitStatus('Bağlandı');
 
-  bot.on('spawn', () => {
-    addLog('Bot başarıyla oyuna doğdu!');
-    botState.status = 'Çevrimiçi';
-    
-    if (bot.pathfinder) {
-      const defaultMove = new movements(bot);
-      bot.pathfinder.setMovements(defaultMove);
-    }
-    updateInventory();
-    startFarmerAutoSell();
+    // Otomatik Giriş ve Rota Komutları
+    setTimeout(() => {
+      bot.chat(`/login ${CONFIG.password}`);
+      console.log('[BOT] /login komutu gönderildi.');
+    }, 2000);
+
+    setTimeout(() => {
+      bot.chat('/skyblock');
+      console.log('[BOT] /skyblock komutu gönderildi.');
+    }, 5000);
+
+    setTimeout(() => {
+      bot.chat('/is go');
+      console.log('[BOT] /is go komutu gönderildi.');
+    }, 8000);
+
+    // Anti-AFK Döngüsü (Zıplama & Bakış Değiştirme)
+    startAntiAFK();
   });
 
+  // Chat Dinleyici
   bot.on('chat', (username, message) => {
-    if (username === bot.username) return;
-    addChat(username, message);
+    io.emit('chat_message', { type: 'chat', sender: username, text: message });
   });
 
-  bot.on('messagestr', (message) => {
-    if (!message) return;
-    if (!message.includes(': ')) {
-      addChat('SYSTEM', message);
+  bot.on('message', (jsonMsg) => {
+    const rawText = jsonMsg.toString();
+    if (rawText.trim()) {
+      io.emit('chat_message', { type: 'system', text: rawText });
     }
   });
 
+  // Can ve Açlık Güncellemesi
   bot.on('health', () => {
-    botState.health = Math.round(bot.health);
-    botState.food = Math.round(bot.food);
-    
-    if (bot.food < 15) {
-      const foodItem = bot.inventory.items().find(i => 
-        i.name.includes('cooked') || i.name.includes('apple') || 
-        i.name.includes('bread') || i.name.includes('steak') || i.name.includes('porkchop')
-      );
-      if (foodItem) {
-        bot.equip(foodItem, 'hand')
-          .then(() => bot.consume())
-          .catch(err => addLog(`Yemek yeme hatası: ${err.message}`));
-      }
-    }
+    io.emit('bot_stats', {
+      health: bot.health,
+      food: bot.food,
+      pos: bot.entity ? bot.entity.position : { x: 0, y: 0, z: 0 }
+    });
   });
 
-  bot.on('move', () => {
-    if (!bot.entity) return;
-    botState.position = {
-      x: Math.floor(bot.entity.position.x),
-      y: Math.floor(bot.entity.position.y),
-      z: Math.floor(bot.entity.position.z),
-      yaw: bot.entity.yaw,
-      pitch: bot.entity.pitch
-    };
-  });
-
+  // Bağlantı Kopma & Hata Durumları
   bot.on('kicked', (reason) => {
-    addLog(`Bot sunucudan atıldı: ${reason}`);
-    botState.status = 'Atıldı';
+    console.log('[BOT] Sunucudan atıldı:', reason);
+    emitStatus('Atıldı: ' + JSON.stringify(reason));
+    stopAntiAFK();
   });
 
   bot.on('error', (err) => {
-    addLog(`Hata oluştu: ${err.message}`);
+    console.error('[BOT] Hata oluştu:', err.message);
+    emitStatus('Hata: ' + err.message);
   });
 
   bot.on('end', () => {
-    addLog('Bağlantı koptu. 10 saniye sonra yeniden bağlanacak...');
-    botState.status = 'Çevrimdışı';
-    if (farmerInterval) clearInterval(farmerInterval);
-    setTimeout(createBot, 10000);
+    console.log(`[BOT] Bağlantı koptu. ${CONFIG.reconnectDelay / 1000} saniye sonra tekrar deneniyor...`);
+    emitStatus('Bağlantı Koptu - Tekrar Deneniyor...');
+    stopAntiAFK();
+    setTimeout(createBot, CONFIG.reconnectDelay);
   });
 }
 
-function updateInventory() {
-  if (!bot || !bot.inventory) return;
-  botState.inventory = bot.inventory.items().map(item => ({
-    slot: item.slot,
-    name: item.name,
-    displayName: item.displayName,
-    count: item.count
-  }));
+// ================= HELPER FUNCTIONS =================
+function startAntiAFK() {
+  if (antiAfkInterval) clearInterval(antiAfkInterval);
+  antiAfkInterval = setInterval(() => {
+    if (bot && bot.entity) {
+      bot.setControlState('jump', true);
+      setTimeout(() => bot.setControlState('jump', false), 500);
+
+      const yaw = Math.random() * Math.PI * 2;
+      const pitch = (Math.random() - 0.5) * Math.PI;
+      bot.look(yaw, pitch, true);
+    }
+  }, 15000);
 }
 
-createBot();
+function stopAntiAFK() {
+  if (antiAfkInterval) clearInterval(antiAfkInterval);
+}
 
-// ==========================================
-// API & WEB PANEL
-// ==========================================
-app.get('/health', (req, res) => res.status(200).send('OK'));
-app.get('/api/status', (req, res) => res.json(botState));
+function emitStatus(status) {
+  io.emit('bot_status', { status });
+}
 
-app.get('/', (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html lang="tr">
-<head>
+// ================= SOCKET.IO CLIENT EVENTS =================
+io.on('connection', (socket) => {
+  console.log('[PANEL] Kullanıcı bağlandı.');
+
+  if (bot && bot.entity) {
+    socket.emit('bot_stats', {
+      health: bot.health,
+      food: bot.food,
+      pos: bot.entity.position
+    });
+  }
+
+  socket.on('send_command', (cmd) => {
+    if (bot && cmd) {
+      bot.chat(cmd);
+      console.log(`[PANEL -> BOT] Komut atıldı: ${cmd}`);
+    }
+  });
+
+  socket.on('force_reconnect', () => {
+    if (bot) {
+      bot.quit();
+    } else {
+      createBot();
+    }
+  });
+});
+
+// ================= DASHBOARD UI (HTML/CSS) =================
+function getDashboardHTML() {
+  return `
+  <!DOCTYPE html>
+  <html lang="tr">
+  <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minecraft Otomatik Çiftçi Panel</title>
+    <title>KnightNW AFK Manager - mistikhanim</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
-        body { background: #0f0f12; color: #dcddde; padding: 20px; }
-        .header { display: flex; justify-content: space-between; align-items: center; background: #18181c; padding: 20px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #28282e; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-        .card { background: #18181c; padding: 20px; border-radius: 12px; border: 1px solid #28282e; }
-        h2 { font-size: 1.1rem; color: #fff; margin-bottom: 12px; border-bottom: 1px solid #28282e; padding-bottom: 8px; }
-        .stat { background: #111114; padding: 10px; border-radius: 6px; margin-bottom: 8px; font-weight: bold; }
-        .logs { height: 250px; overflow-y: auto; background: #0b0b0d; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 0.8rem; color: #8e9297; border: 1px solid #28282e; }
-        .log-entry { margin-bottom: 4px; }
+      * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+      body { background: #121214; color: #e1e1e6; padding: 20px; display: flex; flex-direction: column; gap: 20px; height: 100vh; }
+      header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #29292e; padding-bottom: 15px; }
+      h1 { font-size: 1.4rem; color: #00b37e; }
+      .status-badge { background: #202024; padding: 6px 12px; border-radius: 6px; font-weight: bold; border: 1px solid #323238; }
+      .grid { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; flex: 1; min-height: 0; }
+      .card { background: #202024; border: 1px solid #323238; border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+      .stat-row { display: flex; justify-content: space-between; background: #121214; padding: 10px; border-radius: 6px; }
+      #chat-box { flex: 1; background: #121214; border-radius: 6px; padding: 10px; overflow-y: auto; font-family: monospace; font-size: 0.9rem; border: 1px solid #323238; }
+      .chat-line { margin-bottom: 4px; word-break: break-word; }
+      .chat-system { color: #8d8d99; }
+      .chat-user { color: #50a14f; font-weight: bold; }
+      .input-group { display: flex; gap: 10px; }
+      input { flex: 1; background: #121214; border: 1px solid #323238; color: #fff; padding: 10px; border-radius: 6px; outline: none; }
+      button { background: #00b37e; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+      button:hover { background: #00875f; }
+      .btn-danger { background: #f75a68; }
+      .btn-danger:hover { background: #ce404d; }
     </style>
-</head>
-<body>
-    <div class="header">
-        <h1>🌾 Otomatik Çiftçi Bot Paneli</h1>
-        <span id="status" style="color: #43b581; font-weight: bold;">Yükleniyor...</span>
-    </div>
+  </head>
+  <body>
+    <header>
+      <h1>KnightNW AFK Manager (mistikhanim)</h1>
+      <div class="status-badge" id="status">Bağlanıyor...</div>
+    </header>
 
     <div class="grid">
-        <div class="card">
-            <h2>📊 Sistem Durumu</h2>
-            <div class="stat">❤️ Can: <span id="health">20</span>/20</div>
-            <div class="stat">🍗 Açlık: <span id="food">20</span>/20</div>
-            <div class="stat">📍 Konum: <span id="pos">0, 0, 0</span></div>
-            <div class="stat" style="color: #43b581;">⚙️ Modül: Otomatik Çiftçi Satış (10dk)</div>
-        </div>
+      <div class="card">
+        <h3>Bot Durumu</h3>
+        <div class="stat-row"><span>Can:</span><strong id="health">20 / 20</strong></div>
+        <div class="stat-row"><span>Açlık:</span><strong id="food">20 / 20</strong></div>
+        <div class="stat-row"><span>Konum (XYZ):</span><strong id="pos">0, 0, 0</strong></div>
+        <button class="btn-danger" onclick="reconnect()">Yeniden Bağlan</button>
+      </div>
 
-        <div class="card">
-            <h2>📋 Canlı Otomasyon Logları</h2>
-            <div class="logs" id="logs"></div>
+      <div class="card">
+        <h3>Canlı Oyun Chat & Konsol</h3>
+        <div id="chat-box"></div>
+        <div class="input-group">
+          <input type="text" id="cmd-input" placeholder="Komut veya mesaj yazın..." onkeydown="if(event.key==='Enter') sendCmd()">
+          <button onclick="sendCmd()">Gönder</button>
         </div>
+      </div>
     </div>
 
     <script>
-        async function update() {
-            try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                document.getElementById('status').innerText = data.status;
-                document.getElementById('health').innerText = data.health;
-                document.getElementById('food').innerText = data.food;
-                document.getElementById('pos').innerText = \`\${data.position.x}, \${data.position.y}, \${data.position.z}\`;
-                document.getElementById('logs').innerHTML = data.logs.map(l => \`<div class="log-entry">\${l}</div>\`).join('');
-            } catch (e) {}
-        }
-        setInterval(update, 2000);
-        update();
-    </script>
-</body>
-</html>
-  `);
-});
+      const socket = io();
 
-app.listen(PORT, () => {
-  addLog(`Server ${PORT} portunda aktif!`);
+      socket.on('bot_status', data => {
+        document.getElementById('status').innerText = data.status;
+      });
+
+      socket.on('bot_stats', data => {
+        if(data.health !== undefined) document.getElementById('health').innerText = Math.round(data.health) + ' / 20';
+        if(data.food !== undefined) document.getElementById('food').innerText = Math.round(data.food) + ' / 20';
+        if(data.pos) {
+          document.getElementById('pos').innerText = \`\${Math.round(data.pos.x)}, \${Math.round(data.pos.y)}, \${Math.round(data.pos.z)}\`;
+        }
+      });
+
+      socket.on('chat_message', msg => {
+        const box = document.getElementById('chat-box');
+        const line = document.createElement('div');
+        line.className = 'chat-line ' + (msg.type === 'system' ? 'chat-system' : '');
+        line.innerText = msg.sender ? \`[\${msg.sender}] \${msg.text}\` : msg.text;
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+      });
+
+      function sendCmd() {
+        const input = document.getElementById('cmd-input');
+        if(input.value.trim()) {
+          socket.emit('send_command', input.value.trim());
+          input.value = '';
+        }
+      }
+
+      function reconnect() {
+        socket.emit('force_reconnect');
+      }
+    </script>
+  </body>
+  </html>
+  `;
+}
+
+// ================= START SERVER =================
+server.listen(PORT, () => {
+  console.log(`[WEB] Control Panel http://localhost:${PORT} adresinde aktif.`);
+  createBot();
 });
