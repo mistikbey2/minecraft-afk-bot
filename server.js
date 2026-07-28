@@ -25,7 +25,7 @@ const CONFIG = {
 
   // ÇİFTÇİ OTO SATIŞ AYARLARI
   farmerEnabled: true,
-  farmerInterval: 10 * 60 * 1000 // 10 Dakika (Render dostu düşük yük)
+  farmerInterval: 10 * 60 * 1000 // 10 Dakikada bir (Render dostu)
 };
 
 // ================= EXPRESS & SOCKET.IO =================
@@ -39,7 +39,7 @@ let antiAfkInterval = null;
 let autoChatTimer = null;
 let farmerTimer = null;
 
-// Render / Railway Keep-Alive
+// Render Keep-Alive
 app.get('/', (req, res) => {
   res.send(getDashboardHTML());
 });
@@ -61,10 +61,10 @@ function createBot() {
   });
 
   bot.once('spawn', () => {
-    console.log('[BOT] Oyuna giriş yapıldı! Otomatik komutlar başlatılıyor...');
+    console.log('[BOT] Oyuna giriş yapıldı! Komutlar başlatılıyor...');
     emitStatus('Bağlandı - Giriş Yapılıyor');
 
-    // 1. Otomatik Giriş Komutları
+    // 1. Otomatik Giriş ve Rota
     setTimeout(() => {
       bot.chat(`/login ${CONFIG.password}`);
       console.log('[BOT] /login gönderildi.');
@@ -81,13 +81,13 @@ function createBot() {
       emitStatus('Adaya Geçildi (AFK)');
     }, 14000);
 
-    // 2. Modülleri Başlat
+    // 2. Zamanlayıcıları Başlat
     startAntiAFK();
 
     setTimeout(() => {
       if (CONFIG.autoChatEnabled) startAutoChat();
       if (CONFIG.farmerEnabled) startFarmerAutoSell();
-    }, 20000); // Adaya ışınlandıktan 20sn sonra zamanlayıcılar devreye girer
+    }, 20000); // Adaya oturduktan 20sn sonra başlar
   });
 
   // Chat Dinleyici
@@ -131,7 +131,7 @@ function createBot() {
   });
 }
 
-// ================= MODÜLLER (ANTI-AFK, CHAT, ÇİFTÇİ) =================
+// ================= MODÜLLER =================
 function startAntiAFK() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
   antiAfkInterval = setInterval(() => {
@@ -158,11 +158,11 @@ function startAutoChat() {
   }, CONFIG.autoChatInterval);
 }
 
-// ÇİFTÇİ KAKAO SATIŞ MODÜLÜ
+// ================= 2 AŞAMALI ÇİFTÇİ KAKAO SATIŞ MODÜLÜ =================
 function startFarmerAutoSell() {
   if (farmerTimer) clearInterval(farmerTimer);
 
-  // İlk satışı hemen tetikle, ardından 10 dakikada bir tekrar et
+  // İlk satışı başlat, sonra 10 dakikada bir çalıştır
   sellCocoaBeans();
 
   farmerTimer = setInterval(() => {
@@ -173,52 +173,73 @@ function startFarmerAutoSell() {
 async function sellCocoaBeans() {
   if (!bot || !bot.entity) return;
 
-  console.log('[ÇİFTÇİ] Kakao satış işlemi başlatılıyor...');
+  console.log('[ÇİFTÇİ] Kakao satış süreci başlatıldı...');
 
-  // Menü açılma olayı dinleyicisi
   const onWindowOpen = async (window) => {
-    console.log('[ÇİFTÇİ] Menü açıldı, kakao çekirdeği aranıyor...');
-    
-    // Anti-cheat kick yememek için 1.2s insansı gecikme
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    console.log(`[ÇİFTÇİ] Menü açıldı! Eşyalar taranıyor...`);
 
-    // Menüdeki Kakao Çekirdeği eşyasını bul
+    // Konsola menü içeriğini dök (Debug için)
+    const itemsDebug = window.slots
+      .filter(i => i)
+      .map(i => `[Slot ${i.slot}: ${i.name}]`)
+      .join(', ');
+    console.log('[MENÜ İÇERİĞİ]:', itemsDebug);
+
+    await new Promise(r => setTimeout(r, 1200)); // Anti-cheat gecikmesi
+
+    // 1. ADIM: Sandık / Depo simgesi var mı?
+    const chestItem = window.slots.find(item => 
+      item && (
+        item.name.includes('chest') || 
+        item.name.includes('shulker') ||
+        (item.customName && (item.customName.toLowerCase().includes('sandık') || item.customName.toLowerCase().includes('depo') || item.customName.toLowerCase().includes('ürün')))
+      )
+    );
+
+    // 2. ADIM: Kakao Çekirdeği simgesi var mı?
     const cocoaItem = window.slots.find(item => 
       item && (
         item.name.includes('cocoa') || 
-        item.name.includes('kakao') || 
+        item.name.includes('brown_dye') ||
+        item.name.includes('bean') ||
         (item.customName && item.customName.toLowerCase().includes('kakao'))
       )
     );
 
     if (cocoaItem) {
+      // Doğrudan kakao görüldüyse sol tık yap ve sat
+      console.log(`[ÇİFTÇİ] Kakao simgesi bulundu (Slot ${cocoaItem.slot}). Sol tık yapılıyor...`);
       try {
-        // Left-Click (Sol Tık): slotId, mouseButton (0 = sol tık), mode (0 = normal tık)
-        await bot.clickWindow(cocoaItem.slot, 0, 0);
-        console.log(`[ÇİFTÇİ] Slot ${cocoaItem.slot} üzerindeki kakao çekirdeğine sol tıklandı!`);
+        await bot.clickWindow(cocoaItem.slot, 0, 0); // 0 = Sol Tık
+        console.log('[ÇİFTÇİ] Kakao satma tıklaması gönderildi!');
       } catch (err) {
         console.error('[ÇİFTÇİ] Tıklama hatası:', err.message);
       }
-    } else {
-      console.log('[ÇİFTÇİ] Menüde Kakao Çekirdeği bulunamadı!');
-    }
+      setTimeout(() => { try { bot.closeWindow(window); } catch(e){} }, 1000);
 
-    // İşi bitince pencereyi kapat
-    setTimeout(() => {
-      try { bot.closeWindow(window); } catch (e) {}
-    }, 1000);
+    } else if (chestItem) {
+      // Eğer önce Sandık/Depo menüsüne girmek gerekiyorsa
+      console.log(`[ÇİFTÇİ] Sandık/Depo simgesi bulundu (Slot ${chestItem.slot}). Giriş yapılıyor...`);
+      try {
+        await bot.clickWindow(chestItem.slot, 0, 0);
+      } catch (err) {
+        console.error('[ÇİFTÇİ] Sandık tıklama hatası:', err.message);
+      }
+    } else {
+      console.log('[ÇİFTÇİ] Menüde ne sandık ne de kakao bulunabildi.');
+    }
   };
 
-  // Dinleyiciyi bir defalık bağla
-  bot.once('windowOpen', onWindowOpen);
+  // Dinleyiciyi bağla
+  bot.on('windowOpen', onWindowOpen);
 
   // Komutu gönder
   bot.chat('/çiftçi');
 
-  // Menü açılmazsa dinleyiciyi 8sn sonra temizle
+  // 12 saniye sonra dinleyiciyi kaldır (çakışmaları önlemek için)
   setTimeout(() => {
     bot.removeListener('windowOpen', onWindowOpen);
-  }, 8000);
+  }, 12000);
 }
 
 function stopTimers() {
