@@ -21,7 +21,7 @@ const CONFIG = {
   autoChatMessages: ['sa', 'kolay gelsin beyler', 'afkyim', 'hb'],
 
   farmerEnabled: true,
-  farmerInterval: 10 * 60 * 1000 // 10 Dakikada bir otomatik sat
+  farmerInterval: 5 * 60 * 1000 // HER 5 DAKİKADA BİR (300.000 ms)
 };
 
 // ================= EXPRESS & SOCKET.IO =================
@@ -85,9 +85,8 @@ function createBot() {
     }, 25000);
   });
 
-  // AÇILAN MENÜLERİ CANLI WEB PANLEİNE GÖNDER
   bot.on('windowOpen', (window) => {
-    console.log(`[MENÜ AÇILDI] Window ID: ${window.id}`);
+    console.log(`[MENÜ AÇILDI] ID: ${window.id}`);
     sendWindowToUI(window);
   });
 
@@ -211,83 +210,86 @@ function startAutoChat() {
 
 function startFarmerAutoSell() {
   if (farmerTimer) clearInterval(farmerTimer);
-  sellCocoaBeans();
-  farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval);
+  sellCocoaBeans(); // İlk çalışmayı hemen yap
+  farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval); // Sonra her 5 dakikada bir tekrarla
 }
 
-// ================= GELİŞMİŞ KAKAO SATIŞ MODÜLÜ =================
+// ================= 2 AŞAMALI ÇİFTÇİ KAKAO SATIŞ MODÜLÜ =================
 async function sellCocoaBeans() {
   if (!bot || !bot.entity) return;
 
-  console.log('[ÇİFTÇİ] Kakao satış süreci tetiklendi...');
+  console.log('[ÇİFTÇİ] 5 Dakikalık Kakao Satış Döngüsü Başlatıldı...');
 
-  // 1. DİREKT CHAT KOMUTLARI İLE DENE (En hızlı yol)
-  bot.chat('/çiftçi sat');
-  await new Promise(r => setTimeout(r, 800));
-  bot.chat('/ciftci sat');
-  await new Promise(r => setTimeout(r, 800));
-  bot.chat('/çiftçi deposat');
-  await new Promise(r => setTimeout(r, 800));
+  let currentStep = 1; // 1: Çiftçi Deposu Tıklama, 2: Kakao Tıklama
 
-  // 2. MENÜ AÇARAK ZİNCİRLEME TIKLAMA YÖNTEMİ
   const windowHandler = async (window) => {
     sendWindowToUI(window);
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 1200)); // Menünün yüklenmesini bekle
 
     if (!bot || !bot.currentWindow) return;
 
-    // A) Doğrudan Kakao / Satış Butonları
-    const sellTarget = window.slots.find(s => s && (
-      s.name.includes('cocoa') ||
-      s.name.includes('brown_dye') ||
-      s.name.includes('bean') ||
-      s.name.includes('emerald') ||
-      s.name.includes('gold_ingot') ||
-      (s.customName && (s.customName.toLowerCase().includes('kakao') || s.customName.toLowerCase().includes('sat') || s.customName.toLowerCase().includes('tümünü'))) ||
-      (s.displayName && (s.displayName.toLowerCase().includes('kakao') || s.displayName.toLowerCase().includes('sat') || s.displayName.toLowerCase().includes('tümünü')))
-    ));
+    if (currentStep === 1) {
+      // 1. AŞAMA: "ÇİFTÇİ DEPOSU" EŞYASINI BUL VE SOL TIKLA
+      const depoTarget = window.slots.find(s => s && (
+        (s.customName && s.customName.toLowerCase().includes('depo')) ||
+        (s.displayName && s.displayName.toLowerCase().includes('depo')) ||
+        s.name.includes('chest') ||
+        s.name.includes('barrel') ||
+        s.name.includes('shulker')
+      ));
 
-    if (sellTarget) {
-      console.log(`[ÇİFTÇİ] Satış butonu bulundu (Slot ${sellTarget.slot}). Sol, Sağ ve Shift Tık gönderiliyor...`);
-      try {
-        // Çiftçi eklentilerinde Sağ Tık veya Shift Tık satabilir, üçünü de gönderiyoruz:
-        await bot.clickWindow(sellTarget.slot, 0, 0); // Sol tık
-        await new Promise(r => setTimeout(r, 400));
-        await bot.clickWindow(sellTarget.slot, 1, 0); // Sağ tık
-        await new Promise(r => setTimeout(r, 400));
-        await bot.clickWindow(sellTarget.slot, 0, 1); // Shift + Sol tık
-        console.log('[ÇİFTÇİ] Satış tıklamaları tamamlandı!');
-      } catch (err) {
-        console.error('[ÇİFTÇİ] Tıklama hatası:', err.message);
+      if (depoTarget) {
+        console.log(`[ÇİFTÇİ] 1. Aşama: "Çiftçi Deposu" bulundu (Slot ${depoTarget.slot}). Sol tık atılıyor...`);
+        currentStep = 2; // Bir sonraki açılacak menü için aşamayı 2 yap
+        try {
+          await bot.clickWindow(depoTarget.slot, 0, 0); // Sol tık (button: 0, mode: 0)
+        } catch (err) {
+          console.error('[ÇİFTÇİ] Depo tıklama hatası:', err.message);
+        }
+      } else {
+        console.log('[ÇİFTÇİ] 1. Aşama Hatası: "Çiftçi Deposu" butonu menüde bulunamadı!');
       }
-      return;
-    }
 
-    // B) Depo / Sandık Butonu
-    const storageTarget = window.slots.find(s => s && (
-      s.name.includes('chest') ||
-      s.name.includes('shulker') ||
-      s.name.includes('barrel') ||
-      (s.customName && (s.customName.toLowerCase().includes('depo') || s.customName.toLowerCase().includes('ürün') || s.customName.toLowerCase().includes('sandık'))) ||
-      (s.displayName && (s.displayName.toLowerCase().includes('depo') || s.displayName.toLowerCase().includes('ürün') || s.displayName.toLowerCase().includes('sandık')))
-    ));
+    } else if (currentStep === 2) {
+      // 2. AŞAMA: "KAKAO" EŞYASINI BUL VE SOL TIKLA
+      const kakaoTarget = window.slots.find(s => s && (
+        s.name.includes('cocoa') ||
+        s.name.includes('brown_dye') ||
+        s.name.includes('bean') ||
+        (s.customName && s.customName.toLowerCase().includes('kakao')) ||
+        (s.displayName && s.displayName.toLowerCase().includes('kakao'))
+      ));
 
-    if (storageTarget) {
-      console.log(`[ÇİFTÇİ] Depo butonu bulundu (Slot ${storageTarget.slot}). Giriliyor...`);
-      try {
-        await bot.clickWindow(storageTarget.slot, 0, 0);
-      } catch (err) {
-        console.error('[ÇİFTÇİ] Depo tıklama hatası:', err.message);
+      if (kakaoTarget) {
+        console.log(`[ÇİFTÇİ] 2. Aşama: "Kakao" bulundu (Slot ${kakaoTarget.slot}). Sol tık ile satılıyor...`);
+        try {
+          await bot.clickWindow(kakaoTarget.slot, 0, 0); // Sol tık ile sat
+          console.log('[ÇİFTÇİ] Kakao satışı başarıyla tamamlandı!');
+        } catch (err) {
+          console.error('[ÇİFTÇİ] Kakao tıklama hatası:', err.message);
+        }
+      } else {
+        console.log('[ÇİFTÇİ] 2. Aşama Hatası: "Kakao" eşyası Çiftçi Menüsünde bulunamadı!');
       }
+
+      // Menüyü kapat
+      setTimeout(() => {
+        if (bot && bot.currentWindow) {
+          bot.closeWindow(bot.currentWindow);
+          console.log('[ÇİFTÇİ] Menü kapatıldı.');
+        }
+      }, 1000);
     }
   };
 
-  bot.once('windowOpen', windowHandler);
+  // Dinleyiciyi ekle ve /çiftçi yaz
+  bot.on('windowOpen', windowHandler);
   bot.chat('/çiftçi');
 
+  // 15 Saniye sonra dinleyiciyi güvenli bir şekilde kaldır
   setTimeout(() => {
     if (bot) bot.removeListener('windowOpen', windowHandler);
-  }, 12000);
+  }, 15000);
 }
 
 function stopTimers() {
@@ -325,20 +327,14 @@ io.on('connection', (socket) => {
     bot.chat(cmd);
   });
 
-  // CANLI WEB INSPECTOR'DAN GELEN TIKLAMA İSTEKLERİ
   socket.on('click_slot', async (data) => {
-    // data: { slot: number, button: 0|1, mode: 0|1 }
-    if (!bot || !bot.currentWindow) {
-      console.log('[PANEL] Oyunda açık bir menü yok!');
-      return;
-    }
+    if (!bot || !bot.currentWindow) return;
 
     try {
       const slot = parseInt(data.slot);
-      const button = data.button || 0; // 0 = Sol, 1 = Sağ
-      const mode = data.mode || 0;     // 0 = Normal, 1 = Shift
+      const button = data.button || 0;
+      const mode = data.mode || 0;
       await bot.clickWindow(slot, button, mode);
-      console.log(`[PANEL] Menü Slot ${slot} tıklandı (Buton: ${button}, Mod: ${mode})`);
     } catch (err) {
       console.error('[PANEL] Slot tıklama hatası:', err.message);
     }
@@ -385,7 +381,6 @@ function getDashboardHTML() {
       .btn-danger:hover { background: #ce404d; }
       .btn-warning { background: #e0a96d; color: #121214; }
 
-      /* GUI INSPECTOR STYLES */
       .gui-container { display: none; background: #18181b; border: 2px solid #00b37e; border-radius: 8px; padding: 15px; margin-top: 10px; }
       .gui-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
       .gui-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; background: #09090a; padding: 10px; border-radius: 6px; border: 1px solid #27272a; }
@@ -412,7 +407,7 @@ function getDashboardHTML() {
         <div class="stat-row"><span>Can:</span><strong id="health">20 / 20</strong></div>
         <div class="stat-row"><span>Açlık:</span><strong id="food">20 / 20</strong></div>
         <div class="stat-row"><span>Konum (XYZ):</span><strong id="pos">0, 0, 0</strong></div>
-        <button class="btn-warning" onclick="manualSell()">Anlık Kakao Sat Yap (/sat)</button>
+        <button class="btn-warning" onclick="manualSell()">Anlık Satış Testi Et (/sat)</button>
         <button class="btn-danger" onclick="reconnect()">Yeniden Bağlan</button>
       </div>
 
@@ -420,13 +415,12 @@ function getDashboardHTML() {
         <h3>Canlı Oyun Chat & Konsol</h3>
         <div id="chat-box"></div>
         <div class="input-group">
-          <input type="text" id="cmd-input" placeholder="Komut gönderin (/çiftçi vb)..." onkeydown="if(event.key==='Enter') sendCmd()">
+          <input type="text" id="cmd-input" placeholder="Komut gönderin..." onkeydown="if(event.key==='Enter') sendCmd()">
           <button onclick="sendCmd()">Gönder</button>
         </div>
       </div>
     </div>
 
-    <!-- CANLI SANDIK GUI İNCELEYİCİ -->
     <div class="gui-container" id="gui-box">
       <div class="gui-header">
         <h3 style="color:#00b37e;" id="gui-title">Açık Menü (Sandık)</h3>
@@ -459,7 +453,6 @@ function getDashboardHTML() {
         box.scrollTop = box.scrollHeight;
       });
 
-      // SANDIK GÖRSEL INSPECTOR ALGINDIĞINDA EKRANA BASSIN
       socket.on('window_data', data => {
         const guiBox = document.getElementById('gui-box');
         const guiTitle = document.getElementById('gui-title');
@@ -470,7 +463,7 @@ function getDashboardHTML() {
         guiGrid.innerHTML = '';
 
         data.slots.forEach((s, idx) => {
-          if (idx >= data.slotsCount) return; // Sadece üst sandığı göster
+          if (idx >= data.slotsCount) return;
 
           const slotDiv = document.createElement('div');
           slotDiv.className = 'gui-slot';
@@ -483,7 +476,6 @@ function getDashboardHTML() {
               <div class="click-actions">
                 <button class="btn-mini" onclick="clickSlot(\${s.slot}, 0, 0)">Sol Tık</button>
                 <button class="btn-mini btn-blue" onclick="clickSlot(\${s.slot}, 1, 0)">Sağ Tık</button>
-                <button class="btn-mini btn-purple" onclick="clickSlot(\${s.slot}, 0, 1)">Shift</button>
               </div>
             \`;
           } else {
