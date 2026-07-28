@@ -13,8 +13,8 @@ const CONFIG = {
   port: parseInt(process.env.BOT_PORT) || 25565,
   username: process.env.BOT_USERNAME || 'mistikhanim',
   password: process.env.BOT_PASSWORD || 'salakmustafa',
-  version: false,
-  reconnectDelay: 30000,
+  version: '1.16.5', // Sabit sürüm (BungeeCord kilitlenmesini önler)
+  reconnectDelay: 60000, // IP Engeli (Ban) yememek için 60 saniye güvenli bekleme
   
   autoChatEnabled: true,
   autoChatInterval: 180000, // 3 Dakika
@@ -40,7 +40,7 @@ app.get('/ping', (req, res) => res.status(200).send('OK - Bot Alive'));
 
 // ================= MINEFLAYER BOT CREATION =================
 function createBot() {
-  console.log(`[BOT] ${CONFIG.host} sunucusuna (${CONFIG.username}) bağlanılıyor...`);
+  console.log(`\n[BOT] ${CONFIG.host}:${CONFIG.port} adresine (${CONFIG.username}) bağlanılıyor...`);
   emitStatus('Sunucuya Bağlanılıyor...');
 
   try {
@@ -49,7 +49,7 @@ function createBot() {
       port: CONFIG.port,
       username: CONFIG.username,
       version: CONFIG.version,
-      checkTimeoutInterval: 90000,
+      checkTimeoutInterval: 120000, // Zaman aşımı süresi 2 dakikaya çıkarıldı
     });
   } catch (err) {
     console.error('[BOT OLUŞTURMA HATASI]', err.message);
@@ -113,13 +113,18 @@ function createBot() {
   });
 
   bot.on('error', (err) => {
-    console.error('[HATA]', err.message);
-    emitStatus('Hata: ' + err.message);
+    console.error('[BAĞLANTI HATASI]:', err.code || err.message);
+    if (err.code === 'ECONNREFUSED') {
+      console.error('[TEŞHİS] Sunucu IP/Port bağlantıyı reddetti.');
+    } else if (err.code === 'ETIMEDOUT') {
+      console.error('[TEŞHİS] Zaman aşımı! KnightNW Güvenlik Duvarı Render IP\'sini engelliyor olabilir.');
+    }
+    emitStatus('Hata: ' + (err.code || err.message));
   });
 
   bot.on('end', (reason) => {
-    console.log(`[BOT] Bağlantı koptu (${reason}). ${CONFIG.reconnectDelay / 1000}s sonra tekrar deneniyor...`);
-    emitStatus(`Koptu (${reason}) - Bekleniyor...`);
+    console.log(`[BOT] Bağlantı koptu (Sebep: ${reason}). ${CONFIG.reconnectDelay / 1000}s sonra tekrar deneniyor...`);
+    emitStatus(`Koptu - Bekleniyor...`);
     stopTimers();
     scheduleReconnect();
   });
@@ -166,82 +171,47 @@ function startFarmerAutoSell() {
   farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval);
 }
 
-// ================= ZİNCİRLEME ÇİFTÇİ SATIŞ MODÜLÜ =================
 async function sellCocoaBeans() {
   if (!bot || !bot.entity) return;
 
   console.log('[ÇİFTÇİ] Satış döngüsü başlatıldı. /çiftçi yazılıyor...');
 
   const windowHandler = async (window) => {
-    let windowTitle = 'Menü';
-    try {
-      windowTitle = window.title ? (JSON.parse(window.title).text || window.title) : 'Menü';
-    } catch(e) {
-      windowTitle = window.title || 'Menü';
-    }
-
-    console.log(`\n================ [MENÜ AÇILDI: "${windowTitle}"] ================`);
-
-    // Anti-Cheat / Lag Tıklama Beklemesi (1.2 saniye)
     await new Promise(r => setTimeout(r, 1200));
 
-    // Menü içeriğini dök (Debug)
-    const filledSlots = window.slots.filter(s => s != null);
-    console.log(`[MENÜ İÇERİĞİ - ${filledSlots.length} Eşya]:`);
-    filledSlots.forEach(s => {
-      const name = s.name || '';
-      const custom = s.customName || s.displayName || '';
-      console.log(` -> Slot ${s.slot}: id="${name}" | Isim="${custom}"`);
-    });
-
-    // 1. AŞAMA: Kakao / Hepsini Sat / Tümünü Sat Butonu Var mı?
+    // Kakao / Hepsini Sat
     const sellTarget = window.slots.find(s => s && (
       s.name.includes('cocoa') ||
       s.name.includes('brown_dye') ||
       s.name.includes('bean') ||
-      (s.customName && (s.customName.toLowerCase().includes('kakao') || s.customName.toLowerCase().includes('hepsini sat') || s.customName.toLowerCase().includes('tümünü sat') || s.customName.toLowerCase().includes('depoyu sat'))) ||
-      (s.displayName && (s.displayName.toLowerCase().includes('kakao') || s.displayName.toLowerCase().includes('hepsini sat') || s.displayName.toLowerCase().includes('tümünü sat')))
+      (s.customName && (s.customName.toLowerCase().includes('kakao') || s.customName.toLowerCase().includes('hepsini sat') || s.customName.toLowerCase().includes('tümünü sat')))
     ));
 
     if (sellTarget) {
-      console.log(`[ÇİFTÇİ] Satış/Kakao butonu tespit edildi! Slot: ${sellTarget.slot}. Tıklanıyor...`);
       try {
-        await bot.clickWindow(sellTarget.slot, 0, 0); // Sol Tık
-        console.log(`[ÇİFTÇİ] Slot ${sellTarget.slot} başarıyla tıklandı.`);
-      } catch (err) {
-        console.error('[ÇİFTÇİ] Tıklama hatası:', err.message);
-      }
+        await bot.clickWindow(sellTarget.slot, 0, 0);
+        console.log(`[ÇİFTÇİ] Slot ${sellTarget.slot} tıklandı.`);
+      } catch (err) {}
       return;
     }
 
-    // 2. AŞAMA: Depo / Sandık / Ürünler Butonu Var mı?
+    // Depo / Sandık
     const storageTarget = window.slots.find(s => s && (
       s.name.includes('chest') ||
       s.name.includes('shulker') ||
-      s.name.includes('barrel') ||
-      s.name.includes('hopper') ||
-      (s.customName && (s.customName.toLowerCase().includes('depo') || s.customName.toLowerCase().includes('ürün') || s.customName.toLowerCase().includes('sandık'))) ||
-      (s.displayName && (s.displayName.toLowerCase().includes('depo') || s.displayName.toLowerCase().includes('ürün') || s.displayName.toLowerCase().includes('sandık')))
+      (s.customName && (s.customName.toLowerCase().includes('depo') || s.customName.toLowerCase().includes('ürün')))
     ));
 
     if (storageTarget) {
-      console.log(`[ÇİFTÇİ] Depo/Alt Menü butonu tespit edildi! Slot: ${storageTarget.slot}. Alt menüye giriliyor...`);
       try {
         await bot.clickWindow(storageTarget.slot, 0, 0);
-      } catch (err) {
-        console.error('[ÇİFTÇİ] Alt menü tıklama hatası:', err.message);
-      }
-      return;
+      } catch (err) {}
     }
-
-    console.log('[ÇİFTÇİ] Bu menüde kakao veya depo ikonu eşleşmedi.');
   };
 
-  // Dinleyiciyi bağla (15 saniye boyunca açık tutar)
   bot.on('windowOpen', windowHandler);
   bot.chat('/çiftçi');
 
-  // 15 saniye sonra dinleyiciyi temizle
   setTimeout(() => {
     if (bot) bot.removeListener('windowOpen', windowHandler);
   }, 15000);
@@ -270,24 +240,17 @@ io.on('connection', (socket) => {
   socket.on('send_command', async (cmd) => {
     if (!bot) return;
 
-    // Özel Komut: /clickslot <slot_no> (Web panelden menüdeki slot'a zorla tıklama)
     if (cmd.startsWith('/clickslot')) {
       const parts = cmd.split(' ');
       const slotNum = parseInt(parts[1]);
       if (!isNaN(slotNum) && bot.currentWindow) {
         try {
           await bot.clickWindow(slotNum, 0, 0);
-          console.log(`[PANEL] Açık olan menünün ${slotNum}. slotuna tıklatıldı.`);
-        } catch(e) {
-          console.error('[PANEL] Slot tıklama hatası:', e.message);
-        }
-      } else {
-        console.log('[PANEL] Tıklanacak aktif bir menü bulunamadı veya slot geçersiz.');
+        } catch(e) {}
       }
       return;
     }
 
-    // Özel Komut: /sat (Elle satış tetikleme)
     if (cmd === '/sat') {
       sellCocoaBeans();
       return;
@@ -352,7 +315,7 @@ function getDashboardHTML() {
         <h3>Canlı Oyun Chat & Konsol</h3>
         <div id="chat-box"></div>
         <div class="input-group">
-          <input type="text" id="cmd-input" placeholder="Komut yazın veya slot tıklayın (/clickslot 13)..." onkeydown="if(event.key==='Enter') sendCmd()">
+          <input type="text" id="cmd-input" placeholder="Komut yazın..." onkeydown="if(event.key==='Enter') sendCmd()">
           <button onclick="sendCmd()">Gönder</button>
         </div>
       </div>
