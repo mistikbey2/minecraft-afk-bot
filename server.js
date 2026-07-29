@@ -254,16 +254,14 @@ async function sellCocoaBeans() {
 
   console.log('[ÇİFTÇİ] Kakao Satış İşlemi Başlatıldı...');
 
-  // AÇIK MENÜ VARSA ÖNCE KAPAT
   if (bot.currentWindow) {
     try { bot.closeWindow(bot.currentWindow); } catch(e){}
+    bot.currentWindow = null;
     await new Promise(r => setTimeout(r, 600));
   }
 
-  // Türkçe karakter içermeyen komutu gönder
   bot.chat('/ciftci');
 
-  // Menünün açılmasını bekle (Maksimum 5 saniye)
   let windowOpened = false;
   for (let i = 0; i < 25; i++) {
     await new Promise(r => setTimeout(r, 200));
@@ -285,7 +283,6 @@ async function sellCocoaBeans() {
 
   await new Promise(r => setTimeout(r, 1000));
 
-  // KONSOL DEBUG: Açılan menüdeki tüm eşyaları yazdır
   console.log('--- [DEBUG] 1. AŞAMA MENÜ SLOTLARI ---');
   const topCount1 = bot.currentWindow.inventoryStart || 27;
   for (let i = 0; i < topCount1; i++) {
@@ -295,12 +292,10 @@ async function sellCocoaBeans() {
     }
   }
 
-  // 1. AŞAMA: Çiftçi Deposu Bul
   const depoKeywords = ['depo', 'çiftçi', 'ciftci', 'storage', 'ürün', 'urun'];
   const depoItemNames = ['chest', 'barrel', 'shulker', 'box', 'hopper'];
   let depoSlot = findTargetSlot(bot.currentWindow, depoKeywords, depoItemNames);
 
-  // Otomatik bulamazsa varsayılan KnightNW Depo slotu (genelde 11 veya 13)
   if (depoSlot === null) {
     console.log('[ÇİFTÇİ] Depo slotu ismi eşleşmedi, varsayılan Slot 11 deneniyor...');
     depoSlot = 11;
@@ -314,7 +309,6 @@ async function sellCocoaBeans() {
     return;
   }
 
-  // 2. AŞAMA İÇİN BEKLE (2 saniye)
   await new Promise(r => setTimeout(r, 2000));
 
   if (!bot.currentWindow) {
@@ -322,7 +316,6 @@ async function sellCocoaBeans() {
     return;
   }
 
-  // KONSOL DEBUG: 2. Aşama menüdeki tüm eşyaları yazdır
   console.log('--- [DEBUG] 2. AŞAMA MENÜ SLOTLARI ---');
   const topCount2 = bot.currentWindow.inventoryStart || 27;
   for (let i = 0; i < topCount2; i++) {
@@ -332,67 +325,87 @@ async function sellCocoaBeans() {
     }
   }
 
-  // 2. AŞAMA: Kakao Bul
   const kakaoKeywords = ['kakao', 'cocoa', 'satış', 'satis', 'sat', 'bean'];
   const kakaoItemNames = ['cocoa_beans', 'cocoa', 'brown_dye', 'dye', 'ink_sac', 'dye_powder'];
   let kakaoSlot = findTargetSlot(bot.currentWindow, kakaoKeywords, kakaoItemNames);
 
   if (kakaoSlot === null) {
-    console.log('[ÇİFTÇİ] HATA: 2. Aşamada Kakao slotu bulunamadı! Konsoldaki Slot Numaralarını İnceleyin.');
+    console.log('[ÇİFTÇİ] HATA: 2. Aşamada Kakao slotu bulunamadı!');
     if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
+    bot.currentWindow = null;
     return;
   }
 
   console.log(`[ÇİFTÇİ] 2. Aşama: Kakao (Slot ${kakaoSlot}) tıklanıyor...`);
   try {
-    await bot.clickWindow(kakaoSlot, 0, 0); // Sol tık ile sat
+    await bot.clickWindow(kakaoSlot, 0, 0);
     console.log('[ÇİFTÇİ] BAŞARILI: Kakao satışı yapıldı!');
   } catch (e) {
     console.error('[ÇİFTÇİ] Kakao tıklama hatası:', e.message);
   }
 
-  // Menüyü kapat
   await new Promise(r => setTimeout(r, 1000));
   if (bot.currentWindow) {
     bot.closeWindow(bot.currentWindow);
+    bot.currentWindow = null;
     console.log('[ÇİFTÇİ] Menü kapatıldı.');
   }
 }
 
-// ================= DÜZELTİLMİŞ ENVANTERİ YERE ATMA MODÜLÜ =================
+// ================= KESİNTİSİZ DİNAMİK ENVANTER BOŞALTMA MODÜLÜ =================
 async function dropAllItems() {
   if (!bot) return;
 
-  // CRITICAL FIX: Önce açık olan menüyü kesinlikle kapat
+  console.log('[ENVANTER] Envanter temizleme işlemi başlatıldı...');
+
+  // 1. Açık menü varsa kapat ve değişkeni sıfırla
   if (bot.currentWindow) {
-    console.log('[ENVANTER] Açık olan sandık/menü kapatılıyor...');
+    console.log('[ENVANTER] Açık olan menü kapatılıyor...');
     try {
       bot.closeWindow(bot.currentWindow);
     } catch(e) {}
-    await new Promise(r => setTimeout(r, 600));
+    bot.currentWindow = null;
+    await new Promise(r => setTimeout(r, 800));
   }
 
   if (!bot.inventory) return;
 
-  const items = bot.inventory.items();
-  if (items.length === 0) {
-    console.log('[ENVANTER] Envanterde atılacak eşya yok (Boş)!');
-    return;
-  }
+  // 2. Dinamik While Döngüsü (Eşya kaldığı sürece devam eder)
+  let attempts = 0;
+  const maxAttempts = 50; // Sonsuz döngü koruması
 
-  console.log(`[ENVANTER] Toplam ${items.length} slot eşya yere atılıyor...`);
+  while (bot.inventory.items().length > 0 && attempts < maxAttempts) {
+    attempts++;
+    const currentItems = bot.inventory.items();
+    if (currentItems.length === 0) break;
 
-  for (const item of items) {
+    const item = currentItems[0]; // Her adımda en üstteki ilk eşyayı al
+
     try {
+      console.log(`[ENVANTER] Yere atılıyor (${attempts}): ${item.name} x${item.count}`);
       await bot.tossStack(item);
-      console.log(`[ENVANTER] Yere atıldı: ${item.name} x${item.count}`);
-      await new Promise(r => setTimeout(r, 350)); // Kick yememek için gecikme
+      await new Promise(r => setTimeout(r, 350)); // Anti-cheat takılmaması için bekleme
     } catch (err) {
-      console.error(`[ENVANTER HATA] ${item.name} atılamadı:`, err.message);
+      console.error(`[ENVANTER] tossStack hatası (${item.name}):`, err.message);
+      
+      // YEDEK METOD: Eğer tossStack hata verirse eşyayı sol tıkla ele alıp envanter dışına at
+      try {
+        await bot.clickWindow(item.slot, 0, 0);
+        await new Promise(r => setTimeout(r, 200));
+        await bot.clickWindow(-999, 0, 0); // Slot -999 pencere dışı demektir
+        await new Promise(r => setTimeout(r, 300));
+      } catch (clickErr) {
+        console.error('[ENVANTER] Dışarı atma tıklama hatası:', clickErr.message);
+        break; // Tıklama da başarısız olursa döngüyü kır
+      }
     }
   }
 
-  console.log('[ENVANTER] Tüm envanter yere atıldı!');
+  if (bot.inventory.items().length === 0) {
+    console.log('[ENVANTER] BAŞARILI: Tüm envanter sıfırlandı!');
+  } else {
+    console.log('[ENVANTER] İşlem bitti (Kalan eşya var veya limit ulaşıldı).');
+  }
 }
 
 function stopTimers() {
@@ -454,6 +467,7 @@ io.on('connection', (socket) => {
   socket.on('close_window', () => {
     if (bot && bot.currentWindow) {
       bot.closeWindow(bot.currentWindow);
+      bot.currentWindow = null;
     }
   });
 
