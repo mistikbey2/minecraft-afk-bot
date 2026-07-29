@@ -228,7 +228,7 @@ function startFarmerAutoSell() {
   farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval); 
 }
 
-// ================= YENİLENMİŞ AŞAMALI ÇİFTÇİ KAKAO SATIŞ MODÜLÜ =================
+// ================= GELİŞTİRİLMİŞ ÇİFTÇİ & KAKAO SATIŞ MODÜLÜ =================
 function findTargetSlot(window, keywords, itemNames) {
   if (!window || !window.slots) return null;
   const topCount = window.inventoryStart || 27;
@@ -237,12 +237,10 @@ function findTargetSlot(window, keywords, itemNames) {
     const item = window.slots[i];
     if (!item) continue;
 
-    // 1. Standart İsim Kontrolü (örneğin chest, cocoa_beans)
-    if (itemNames.some(name => item.name.includes(name))) {
+    if (itemNames.some(name => item.name && item.name.includes(name))) {
       return item.slot;
     }
 
-    // 2. NBT/JSON Derin Metin Taraması (Türkçe karakter ve renk kodlarını aşar)
     const str = JSON.stringify(item).toLowerCase();
     if (keywords.some(kw => str.includes(kw.toLowerCase()))) {
       return item.slot;
@@ -255,11 +253,19 @@ async function sellCocoaBeans() {
   if (!bot || !bot.entity) return;
 
   console.log('[ÇİFTÇİ] Kakao Satış İşlemi Başlatıldı...');
-  bot.chat('/çiftçi');
 
-  // Menünün açılmasını bekle (maksimum 4 saniye)
+  // AÇIK MENÜ VARSA ÖNCE KAPAT
+  if (bot.currentWindow) {
+    try { bot.closeWindow(bot.currentWindow); } catch(e){}
+    await new Promise(r => setTimeout(r, 600));
+  }
+
+  // Türkçe karakter içermeyen komutu gönder
+  bot.chat('/ciftci');
+
+  // Menünün açılmasını bekle (Maksimum 5 saniye)
   let windowOpened = false;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 25; i++) {
     await new Promise(r => setTimeout(r, 200));
     if (bot.currentWindow) {
       windowOpened = true;
@@ -268,51 +274,76 @@ async function sellCocoaBeans() {
   }
 
   if (!windowOpened || !bot.currentWindow) {
-    console.log('[ÇİFTÇİ] HATA: /çiftçi menüsü açılmadı!');
-    return;
+    console.log('[ÇİFTÇİ] /ciftci açılmadı, alternatif /çiftçi deneniyor...');
+    bot.chat('/çiftçi');
+    await new Promise(r => setTimeout(r, 2000));
+    if (!bot.currentWindow) {
+      console.log('[ÇİFTÇİ] HATA: Çiftçi menüsü hiçbir şekilde açılmadı!');
+      return;
+    }
   }
 
-  await new Promise(r => setTimeout(r, 1000)); // İçerik yükleme senkronizasyonu
+  await new Promise(r => setTimeout(r, 1000));
+
+  // KONSOL DEBUG: Açılan menüdeki tüm eşyaları yazdır
+  console.log('--- [DEBUG] 1. AŞAMA MENÜ SLOTLARI ---');
+  const topCount1 = bot.currentWindow.inventoryStart || 27;
+  for (let i = 0; i < topCount1; i++) {
+    const item = bot.currentWindow.slots[i];
+    if (item) {
+      console.log(`Slot ${i}: ID=${item.name} | CustomName=${item.customName || 'Yok'}`);
+    }
+  }
 
   // 1. AŞAMA: Çiftçi Deposu Bul
-  const depoKeywords = ['depo', 'çiftçi', 'ciftci', 'storage'];
-  const depoItemNames = ['chest', 'barrel', 'shulker', 'box'];
-  const depoSlot = findTargetSlot(bot.currentWindow, depoKeywords, depoItemNames);
+  const depoKeywords = ['depo', 'çiftçi', 'ciftci', 'storage', 'ürün', 'urun'];
+  const depoItemNames = ['chest', 'barrel', 'shulker', 'box', 'hopper'];
+  let depoSlot = findTargetSlot(bot.currentWindow, depoKeywords, depoItemNames);
 
+  // Otomatik bulamazsa varsayılan KnightNW Depo slotu (genelde 11 veya 13)
   if (depoSlot === null) {
-    console.log('[ÇİFTÇİ] HATA: 1. Aşamada "Çiftçi Deposu" bulunamadı!');
-    if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
-    return;
+    console.log('[ÇİFTÇİ] Depo slotu ismi eşleşmedi, varsayılan Slot 11 deneniyor...');
+    depoSlot = 11;
   }
 
-  console.log(`[ÇİFTÇİ] 1. Aşama: "Çiftçi Deposu" (Slot ${depoSlot}) tıklanıyor...`);
+  console.log(`[ÇİFTÇİ] 1. Aşama: Slot ${depoSlot} tıklanıyor...`);
   try {
-    await bot.clickWindow(depoSlot, 0, 0); // Sol tık
+    await bot.clickWindow(depoSlot, 0, 0);
   } catch (e) {
     console.error('[ÇİFTÇİ] Depo tıklama hatası:', e.message);
     return;
   }
 
-  // 2. AŞAMA İÇİN BEKLE (1.5 saniye - Menünün güncellenmesi için)
-  await new Promise(r => setTimeout(r, 1500));
+  // 2. AŞAMA İÇİN BEKLE (2 saniye)
+  await new Promise(r => setTimeout(r, 2000));
 
   if (!bot.currentWindow) {
-    console.log('[ÇİFTÇİ] HATA: 2. Aşama menüsü kapandı veya açılmadı!');
+    console.log('[ÇİFTÇİ] HATA: 2. Aşama menüsü açılmadı!');
     return;
   }
 
+  // KONSOL DEBUG: 2. Aşama menüdeki tüm eşyaları yazdır
+  console.log('--- [DEBUG] 2. AŞAMA MENÜ SLOTLARI ---');
+  const topCount2 = bot.currentWindow.inventoryStart || 27;
+  for (let i = 0; i < topCount2; i++) {
+    const item = bot.currentWindow.slots[i];
+    if (item) {
+      console.log(`Slot ${i}: ID=${item.name} | CustomName=${item.customName || 'Yok'}`);
+    }
+  }
+
   // 2. AŞAMA: Kakao Bul
-  const kakaoKeywords = ['kakao', 'cocoa', 'satış', 'sat'];
-  const kakaoItemNames = ['cocoa_beans', 'cocoa', 'brown_dye', 'dye', 'bean'];
-  const kakaoSlot = findTargetSlot(bot.currentWindow, kakaoKeywords, kakaoItemNames);
+  const kakaoKeywords = ['kakao', 'cocoa', 'satış', 'satis', 'sat', 'bean'];
+  const kakaoItemNames = ['cocoa_beans', 'cocoa', 'brown_dye', 'dye', 'ink_sac', 'dye_powder'];
+  let kakaoSlot = findTargetSlot(bot.currentWindow, kakaoKeywords, kakaoItemNames);
 
   if (kakaoSlot === null) {
-    console.log('[ÇİFTÇİ] HATA: 2. Aşamada "Kakao" bulunamadı!');
+    console.log('[ÇİFTÇİ] HATA: 2. Aşamada Kakao slotu bulunamadı! Konsoldaki Slot Numaralarını İnceleyin.');
     if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
     return;
   }
 
-  console.log(`[ÇİFTÇİ] 2. Aşama: "Kakao" (Slot ${kakaoSlot}) tıklanıyor...`);
+  console.log(`[ÇİFTÇİ] 2. Aşama: Kakao (Slot ${kakaoSlot}) tıklanıyor...`);
   try {
     await bot.clickWindow(kakaoSlot, 0, 0); // Sol tık ile sat
     console.log('[ÇİFTÇİ] BAŞARILI: Kakao satışı yapıldı!');
@@ -328,13 +359,24 @@ async function sellCocoaBeans() {
   }
 }
 
-// ================= ENVANTERİ YERE ATMA MODÜLÜ =================
+// ================= DÜZELTİLMİŞ ENVANTERİ YERE ATMA MODÜLÜ =================
 async function dropAllItems() {
-  if (!bot || !bot.inventory) return;
+  if (!bot) return;
+
+  // CRITICAL FIX: Önce açık olan menüyü kesinlikle kapat
+  if (bot.currentWindow) {
+    console.log('[ENVANTER] Açık olan sandık/menü kapatılıyor...');
+    try {
+      bot.closeWindow(bot.currentWindow);
+    } catch(e) {}
+    await new Promise(r => setTimeout(r, 600));
+  }
+
+  if (!bot.inventory) return;
 
   const items = bot.inventory.items();
   if (items.length === 0) {
-    console.log('[ENVANTER] Botun envanteri zaten boş!');
+    console.log('[ENVANTER] Envanterde atılacak eşya yok (Boş)!');
     return;
   }
 
@@ -343,10 +385,10 @@ async function dropAllItems() {
   for (const item of items) {
     try {
       await bot.tossStack(item);
-      console.log(`[ENVANTER] Atıldı: ${item.name} x${item.count}`);
-      await new Promise(r => setTimeout(r, 250)); // Sunucudan kick yememek için 250ms bekle
+      console.log(`[ENVANTER] Yere atıldı: ${item.name} x${item.count}`);
+      await new Promise(r => setTimeout(r, 350)); // Kick yememek için gecikme
     } catch (err) {
-      console.error(`[ENVANTER] ${item.name} atılırken hata:`, err.message);
+      console.error(`[ENVANTER HATA] ${item.name} atılamadı:`, err.message);
     }
   }
 
