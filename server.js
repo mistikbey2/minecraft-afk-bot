@@ -21,7 +21,7 @@ const CONFIG = {
   autoChatMessages: ['sa', 'kolay gelsin beyler', 'afkyim', 'hb'],
 
   farmerEnabled: true,
-  farmerInterval: 5 * 60 * 1000 // HER 5 DAKİKADA BİR (300.000 ms)
+  farmerInterval: 5 * 60 * 1000 // HER 5 DAKİKADA BİR KAKAO SAT
 };
 
 // ================= EXPRESS & SOCKET.IO =================
@@ -58,24 +58,43 @@ function createBot() {
   }
 
   bot.once('spawn', () => {
-    console.log('[BOT] Oyuna başarıyla giriş yapıldı!');
+    console.log('[BOT] Sunucuya bağlantı kuruldu!');
     emitStatus('Bağlandı - Giriş Yapılıyor');
 
+    // 1. ADIM: LOGIN GÖNDER (4. saniye)
     setTimeout(() => {
-      bot.chat(`/login ${CONFIG.password}`);
-      console.log('[BOT] /login gönderildi.');
-    }, 5000);
+      if (bot) {
+        bot.chat(`/login ${CONFIG.password}`);
+        console.log('[BOT] /login gönderildi.');
+      }
+    }, 4000);
 
+    // 2. ADIM: SKYBLOCK'A GEÇİŞ (9. saniye - 3 Farklı Komut Alternatifi)
     setTimeout(() => {
-      bot.chat('/skyblock');
-      console.log('[BOT] /skyblock gönderildi.');
-    }, 10000);
+      if (bot) {
+        console.log('[BOT] Skyblock sunucusuna geçiş deneniyor...');
+        bot.chat('/skyblock');
+        bot.chat('/server skyblock');
+        bot.chat('/sb');
+      }
+    }, 9000);
 
+    // 3. ADIM: SKYBLOCK YEDEK DENEME (14. saniye)
     setTimeout(() => {
-      bot.chat('/is go');
-      console.log('[BOT] /is go gönderildi.');
-      emitStatus('Adaya Geçildi (AFK)');
-    }, 15000);
+      if (bot) {
+        console.log('[BOT] Skyblock geçiş yedek denemesi...');
+        bot.chat('/skyblock');
+      }
+    }, 14000);
+
+    // 4. ADIM: ADAYA GEÇİŞ (19. saniye)
+    setTimeout(() => {
+      if (bot) {
+        console.log('[BOT] /is go gönderiliyor...');
+        bot.chat('/is go');
+        emitStatus('Adaya Geçildi (AFK)');
+      }
+    }, 19000);
 
     startAntiAFK();
 
@@ -210,26 +229,25 @@ function startAutoChat() {
 
 function startFarmerAutoSell() {
   if (farmerTimer) clearInterval(farmerTimer);
-  sellCocoaBeans(); // İlk çalışmayı hemen yap
-  farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval); // Sonra her 5 dakikada bir tekrarla
+  sellCocoaBeans(); 
+  farmerTimer = setInterval(sellCocoaBeans, CONFIG.farmerInterval); 
 }
 
 // ================= 2 AŞAMALI ÇİFTÇİ KAKAO SATIŞ MODÜLÜ =================
 async function sellCocoaBeans() {
   if (!bot || !bot.entity) return;
 
-  console.log('[ÇİFTÇİ] 5 Dakikalık Kakao Satış Döngüsü Başlatıldı...');
+  console.log('[ÇİFTÇİ] Kakao Satış Döngüsü Başlatıldı...');
 
-  let currentStep = 1; // 1: Çiftçi Deposu Tıklama, 2: Kakao Tıklama
+  let currentStep = 1;
 
   const windowHandler = async (window) => {
     sendWindowToUI(window);
-    await new Promise(r => setTimeout(r, 1200)); // Menünün yüklenmesini bekle
+    await new Promise(r => setTimeout(r, 1200));
 
     if (!bot || !bot.currentWindow) return;
 
     if (currentStep === 1) {
-      // 1. AŞAMA: "ÇİFTÇİ DEPOSU" EŞYASINI BUL VE SOL TIKLA
       const depoTarget = window.slots.find(s => s && (
         (s.customName && s.customName.toLowerCase().includes('depo')) ||
         (s.displayName && s.displayName.toLowerCase().includes('depo')) ||
@@ -240,18 +258,17 @@ async function sellCocoaBeans() {
 
       if (depoTarget) {
         console.log(`[ÇİFTÇİ] 1. Aşama: "Çiftçi Deposu" bulundu (Slot ${depoTarget.slot}). Sol tık atılıyor...`);
-        currentStep = 2; // Bir sonraki açılacak menü için aşamayı 2 yap
+        currentStep = 2;
         try {
-          await bot.clickWindow(depoTarget.slot, 0, 0); // Sol tık (button: 0, mode: 0)
+          await bot.clickWindow(depoTarget.slot, 0, 0);
         } catch (err) {
           console.error('[ÇİFTÇİ] Depo tıklama hatası:', err.message);
         }
       } else {
-        console.log('[ÇİFTÇİ] 1. Aşama Hatası: "Çiftçi Deposu" butonu menüde bulunamadı!');
+        console.log('[ÇİFTÇİ] 1. Aşama Hatası: "Çiftçi Deposu" menüde bulunamadı!');
       }
 
     } else if (currentStep === 2) {
-      // 2. AŞAMA: "KAKAO" EŞYASINI BUL VE SOL TIKLA
       const kakaoTarget = window.slots.find(s => s && (
         s.name.includes('cocoa') ||
         s.name.includes('brown_dye') ||
@@ -263,16 +280,15 @@ async function sellCocoaBeans() {
       if (kakaoTarget) {
         console.log(`[ÇİFTÇİ] 2. Aşama: "Kakao" bulundu (Slot ${kakaoTarget.slot}). Sol tık ile satılıyor...`);
         try {
-          await bot.clickWindow(kakaoTarget.slot, 0, 0); // Sol tık ile sat
+          await bot.clickWindow(kakaoTarget.slot, 0, 0);
           console.log('[ÇİFTÇİ] Kakao satışı başarıyla tamamlandı!');
         } catch (err) {
           console.error('[ÇİFTÇİ] Kakao tıklama hatası:', err.message);
         }
       } else {
-        console.log('[ÇİFTÇİ] 2. Aşama Hatası: "Kakao" eşyası Çiftçi Menüsünde bulunamadı!');
+        console.log('[ÇİFTÇİ] 2. Aşama Hatası: "Kakao" bulunamadı!');
       }
 
-      // Menüyü kapat
       setTimeout(() => {
         if (bot && bot.currentWindow) {
           bot.closeWindow(bot.currentWindow);
@@ -282,11 +298,9 @@ async function sellCocoaBeans() {
     }
   };
 
-  // Dinleyiciyi ekle ve /çiftçi yaz
   bot.on('windowOpen', windowHandler);
   bot.chat('/çiftçi');
 
-  // 15 Saniye sonra dinleyiciyi güvenli bir şekilde kaldır
   setTimeout(() => {
     if (bot) bot.removeListener('windowOpen', windowHandler);
   }, 15000);
@@ -392,7 +406,6 @@ function getDashboardHTML() {
       .click-actions { display: flex; gap: 4px; margin-top: 4px; }
       .btn-mini { padding: 2px 4px; font-size: 0.6rem; border-radius: 3px; }
       .btn-blue { background: #3b82f6; }
-      .btn-purple { background: #8b5cf6; }
     </style>
   </head>
   <body>
@@ -407,7 +420,7 @@ function getDashboardHTML() {
         <div class="stat-row"><span>Can:</span><strong id="health">20 / 20</strong></div>
         <div class="stat-row"><span>Açlık:</span><strong id="food">20 / 20</strong></div>
         <div class="stat-row"><span>Konum (XYZ):</span><strong id="pos">0, 0, 0</strong></div>
-        <button class="btn-warning" onclick="manualSell()">Anlık Satış Testi Et (/sat)</button>
+        <button class="btn-warning" onclick="manualSell()">Anlık Kakao Sat Yap (/sat)</button>
         <button class="btn-danger" onclick="reconnect()">Yeniden Bağlan</button>
       </div>
 
