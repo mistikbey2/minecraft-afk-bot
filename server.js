@@ -16,9 +16,9 @@ const CONFIG = {
   version: '1.16.5',
   reconnectDelay: 30000,
   
-  autoChatEnabled: true,
-  autoChatInterval: 180000, // 3 Dakika
-  autoChatMessages: ['sa', 'kolay gelsin beyler', 'afkyim', 'hb'],
+  autoChatEnabled: false, // OTOMATİK MESAJ KAPATILDI
+  autoChatInterval: 180000,
+  autoChatMessages: [], // OTOMATİK MESAJ LİSTESİ TEMİZLENDİ
 
   farmerEnabled: true,
   farmerInterval: 5 * 60 * 1000 // HER 5 DAKİKADA BİR (300.000 ms)
@@ -212,6 +212,8 @@ function startAntiAFK() {
 
 function startAutoChat() {
   if (autoChatTimer) clearInterval(autoChatTimer);
+  if (!CONFIG.autoChatEnabled || CONFIG.autoChatMessages.length === 0) return;
+
   autoChatTimer = setInterval(() => {
     if (bot && bot.entity) {
       const msgs = CONFIG.autoChatMessages;
@@ -352,13 +354,12 @@ async function sellCocoaBeans() {
   }
 }
 
-// ================= KESİNTİSİZ DİNAMİK ENVANTER BOŞALTMA MODÜLÜ =================
+// ================= DİNAMİK ENVANTER BOŞALTMA MODÜLÜ =================
 async function dropAllItems() {
   if (!bot) return;
 
   console.log('[ENVANTER] Envanter temizleme işlemi başlatıldı...');
 
-  // 1. Açık menü varsa kapat ve değişkeni sıfırla
   if (bot.currentWindow) {
     console.log('[ENVANTER] Açık olan menü kapatılıyor...');
     try {
@@ -370,33 +371,30 @@ async function dropAllItems() {
 
   if (!bot.inventory) return;
 
-  // 2. Dinamik While Döngüsü (Eşya kaldığı sürece devam eder)
   let attempts = 0;
-  const maxAttempts = 50; // Sonsuz döngü koruması
+  const maxAttempts = 50;
 
   while (bot.inventory.items().length > 0 && attempts < maxAttempts) {
     attempts++;
     const currentItems = bot.inventory.items();
     if (currentItems.length === 0) break;
 
-    const item = currentItems[0]; // Her adımda en üstteki ilk eşyayı al
+    const item = currentItems[0];
 
     try {
       console.log(`[ENVANTER] Yere atılıyor (${attempts}): ${item.name} x${item.count}`);
       await bot.tossStack(item);
-      await new Promise(r => setTimeout(r, 350)); // Anti-cheat takılmaması için bekleme
+      await new Promise(r => setTimeout(r, 350));
     } catch (err) {
       console.error(`[ENVANTER] tossStack hatası (${item.name}):`, err.message);
-      
-      // YEDEK METOD: Eğer tossStack hata verirse eşyayı sol tıkla ele alıp envanter dışına at
       try {
         await bot.clickWindow(item.slot, 0, 0);
         await new Promise(r => setTimeout(r, 200));
-        await bot.clickWindow(-999, 0, 0); // Slot -999 pencere dışı demektir
+        await bot.clickWindow(-999, 0, 0);
         await new Promise(r => setTimeout(r, 300));
       } catch (clickErr) {
         console.error('[ENVANTER] Dışarı atma tıklama hatası:', clickErr.message);
-        break; // Tıklama da başarısız olursa döngüyü kır
+        break;
       }
     }
   }
@@ -404,7 +402,7 @@ async function dropAllItems() {
   if (bot.inventory.items().length === 0) {
     console.log('[ENVANTER] BAŞARILI: Tüm envanter sıfırlandı!');
   } else {
-    console.log('[ENVANTER] İşlem bitti (Kalan eşya var veya limit ulaşıldı).');
+    console.log('[ENVANTER] İşlem bitti.');
   }
 }
 
