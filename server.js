@@ -16,12 +16,14 @@ const CONFIG = {
   version: '1.16.5',
   reconnectDelay: 30000,
   
-  autoChatEnabled: false, // OTOMATİK MESAJ KAPATILDI
+  autoChatEnabled: false,
   autoChatInterval: 180000,
-  autoChatMessages: [], // OTOMATİK MESAJ LİSTESİ TEMİZLENDİ
+  autoChatMessages: [],
 
   farmerEnabled: true,
-  farmerInterval: 5 * 60 * 1000 // HER 5 DAKİKADA BİR (300.000 ms)
+  farmerInterval: 5 * 60 * 1000, // HER 5 DAKİKADA BİR
+
+  autoRestartInterval: 4 * 60 * 60 * 1000 // HER 4 SAATTE BİR RAM TEMİZLİĞİ VE RESET
 };
 
 // ================= EXPRESS & SOCKET.IO =================
@@ -34,6 +36,7 @@ let bot = null;
 let antiAfkInterval = null;
 let autoChatTimer = null;
 let farmerTimer = null;
+let autoRestartTimer = null;
 
 app.get('/', (req, res) => res.send(getDashboardHTML()));
 app.get('/ping', (req, res) => res.status(200).send('OK - Bot Alive'));
@@ -50,6 +53,7 @@ function createBot() {
       username: CONFIG.username,
       version: CONFIG.version,
       checkTimeoutInterval: 120000,
+      viewDistance: 'tiny' // RAM KULLANISINI MİNİMUMA İNDİRİR
     });
   } catch (err) {
     console.error('[BOT OLUŞTURMA HATASI]', err.message);
@@ -96,6 +100,7 @@ function createBot() {
     setTimeout(() => {
       if (CONFIG.autoChatEnabled) startAutoChat();
       if (CONFIG.farmerEnabled) startFarmerAutoSell();
+      startAutoRestartTimer(); // 4 Saatlik Hafıza Temizleyici Başlat
     }, 25000);
   });
 
@@ -133,6 +138,7 @@ function createBot() {
     console.log('[KICKED] Sunucudan atıldı:', cleanReason);
     emitStatus('Atıldı: ' + cleanReason);
     stopTimers();
+    scheduleReconnect();
   });
 
   bot.on('error', (err) => {
@@ -149,11 +155,22 @@ function createBot() {
 }
 
 function scheduleReconnect() {
+  stopTimers();
   if (bot) {
+    try { bot.quit(); } catch(e){}
     bot.removeAllListeners();
     bot = null;
   }
+  console.log(`[RECONNECT] ${CONFIG.reconnectDelay / 1000} saniye sonra yeniden bağlanılıyor...`);
   setTimeout(createBot, CONFIG.reconnectDelay);
+}
+
+function startAutoRestartTimer() {
+  if (autoRestartTimer) clearTimeout(autoRestartTimer);
+  autoRestartTimer = setTimeout(() => {
+    console.log('[PERİYODİK RESET] RAM temizliği ve sorunsuz AFK için bot yeniden başlatılıyor...');
+    scheduleReconnect();
+  }, CONFIG.autoRestartInterval);
 }
 
 function sendWindowToUI(window) {
@@ -285,25 +302,14 @@ async function sellCocoaBeans() {
 
   await new Promise(r => setTimeout(r, 1000));
 
-  console.log('--- [DEBUG] 1. AŞAMA MENÜ SLOTLARI ---');
-  const topCount1 = bot.currentWindow.inventoryStart || 27;
-  for (let i = 0; i < topCount1; i++) {
-    const item = bot.currentWindow.slots[i];
-    if (item) {
-      console.log(`Slot ${i}: ID=${item.name} | CustomName=${item.customName || 'Yok'}`);
-    }
-  }
-
   const depoKeywords = ['depo', 'çiftçi', 'ciftci', 'storage', 'ürün', 'urun'];
   const depoItemNames = ['chest', 'barrel', 'shulker', 'box', 'hopper'];
   let depoSlot = findTargetSlot(bot.currentWindow, depoKeywords, depoItemNames);
 
   if (depoSlot === null) {
-    console.log('[ÇİFTÇİ] Depo slotu ismi eşleşmedi, varsayılan Slot 11 deneniyor...');
     depoSlot = 11;
   }
 
-  console.log(`[ÇİFTÇİ] 1. Aşama: Slot ${depoSlot} tıklanıyor...`);
   try {
     await bot.clickWindow(depoSlot, 0, 0);
   } catch (e) {
@@ -314,17 +320,7 @@ async function sellCocoaBeans() {
   await new Promise(r => setTimeout(r, 2000));
 
   if (!bot.currentWindow) {
-    console.log('[ÇİFTÇİ] HATA: 2. Aşama menüsü açılmadı!');
     return;
-  }
-
-  console.log('--- [DEBUG] 2. AŞAMA MENÜ SLOTLARI ---');
-  const topCount2 = bot.currentWindow.inventoryStart || 27;
-  for (let i = 0; i < topCount2; i++) {
-    const item = bot.currentWindow.slots[i];
-    if (item) {
-      console.log(`Slot ${i}: ID=${item.name} | CustomName=${item.customName || 'Yok'}`);
-    }
   }
 
   const kakaoKeywords = ['kakao', 'cocoa', 'satış', 'satis', 'sat', 'bean'];
@@ -332,13 +328,11 @@ async function sellCocoaBeans() {
   let kakaoSlot = findTargetSlot(bot.currentWindow, kakaoKeywords, kakaoItemNames);
 
   if (kakaoSlot === null) {
-    console.log('[ÇİFTÇİ] HATA: 2. Aşamada Kakao slotu bulunamadı!');
     if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
     bot.currentWindow = null;
     return;
   }
 
-  console.log(`[ÇİFTÇİ] 2. Aşama: Kakao (Slot ${kakaoSlot}) tıklanıyor...`);
   try {
     await bot.clickWindow(kakaoSlot, 0, 0);
     console.log('[ÇİFTÇİ] BAŞARILI: Kakao satışı yapıldı!');
@@ -361,7 +355,6 @@ async function dropAllItems() {
   console.log('[ENVANTER] Envanter temizleme işlemi başlatıldı...');
 
   if (bot.currentWindow) {
-    console.log('[ENVANTER] Açık olan menü kapatılıyor...');
     try {
       bot.closeWindow(bot.currentWindow);
     } catch(e) {}
@@ -382,27 +375,18 @@ async function dropAllItems() {
     const item = currentItems[0];
 
     try {
-      console.log(`[ENVANTER] Yere atılıyor (${attempts}): ${item.name} x${item.count}`);
       await bot.tossStack(item);
       await new Promise(r => setTimeout(r, 350));
     } catch (err) {
-      console.error(`[ENVANTER] tossStack hatası (${item.name}):`, err.message);
       try {
         await bot.clickWindow(item.slot, 0, 0);
         await new Promise(r => setTimeout(r, 200));
         await bot.clickWindow(-999, 0, 0);
         await new Promise(r => setTimeout(r, 300));
       } catch (clickErr) {
-        console.error('[ENVANTER] Dışarı atma tıklama hatası:', clickErr.message);
         break;
       }
     }
-  }
-
-  if (bot.inventory.items().length === 0) {
-    console.log('[ENVANTER] BAŞARILI: Tüm envanter sıfırlandı!');
-  } else {
-    console.log('[ENVANTER] İşlem bitti.');
   }
 }
 
@@ -410,6 +394,7 @@ function stopTimers() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
   if (autoChatTimer) clearInterval(autoChatTimer);
   if (farmerTimer) clearInterval(farmerTimer);
+  if (autoRestartTimer) clearTimeout(autoRestartTimer);
 }
 
 function emitStatus(status) {
